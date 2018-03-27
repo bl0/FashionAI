@@ -103,8 +103,9 @@ ENV/
 # vim
 *.swp
 
-# tmp folders
+# my ignore 
 logs
 models
 result
 transfer_learning.ipynb
+*.pth.tar
