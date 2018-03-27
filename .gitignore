@@ -99,3 +99,12 @@ ENV/
 
 # mypy
 .mypy_cache/
+
+# vim
+*.swp
+
+# tmp folders
+logs
+models
+result
+transfer_learning.ipynb
