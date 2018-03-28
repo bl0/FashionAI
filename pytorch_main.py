@@ -13,15 +13,14 @@ import torch.backends.cudnn as cudnn
 import torch.optim
 import torch.utils.data
 import torchvision.transforms as transforms
-import torchvision.datasets as datasets
 import torchvision.models as models
+
 from util import save_checkpoint, AverageMeter, accuracy, write_results
 from fashionai_dataset import FashionAIDataset, FashionAITestDataset, classes
 
 from pprint import pprint
 import warnings
-import ipdb
-
+from tensorboardX import SummaryWriter
 
 warnings.filterwarnings("ignore")
 
@@ -42,7 +41,7 @@ parser.add_argument('--arch', '-a', metavar='ARCH', default='resnet50',
                     help='model architecture: ' +
                         ' | '.join(model_names) +
                         ' (default: resnet18)')
-parser.add_argument('-j', '--workers', default=4, type=int, metavar='N',
+parser.add_argument('-j', '--workers', default=12, type=int, metavar='N',
                     help='number of data loading workers (default: 4)')
 parser.add_argument('--epochs', default=10, type=int, metavar='N',
                     help='number of total epochs to run')
@@ -66,19 +65,20 @@ parser.add_argument('--pretrained', dest='pretrained', action='store_true',
                     help='use pre-trained model')
 parser.add_argument('--gpus', default='5', type=str, metavar='GPU', help='id of gpu')
 parser.add_argument('--inference', dest='inference', action='store_true',  help='inference test data')
-parser.add_argument('--save_path', default='./results', type=str, metavar='PATH', help='folder path to save result file')
+parser.add_argument('--save_path', default='./results', type=str, metavar='PATH', help='folder to save result file')
+parser.add_argument('--tensorboard_log_path', default='./tensorboard_log', type=str, metavar='PATH', help='folder to place tensorboard logs')
 
 args = parser.parse_args()
 best_prec1 = 0
 class_name = None
-args.input_size = 299 if args.arch.startswith('inception') else 224
-args.resize_size = 300 if args.arch.startswith('inception') else 256
-pprint(vars(args))
-
 os.environ["CUDA_VISIBLE_DEVICES"] = args.gpus
 
+# for tensorboard
+writer = SummaryWriter(os.path.join(args.tensorboard_log_path, '{}_{}'.format(args.arch, args.cur_class_idx)))
+# writer = SummaryWriter(args.tensorboard_log_path)
+global_train_step = 0
+
 def load_data():
-    # Data loading code
     global class_name
     if args.cur_class_idx == -1:
         print("not supported yet")
@@ -140,8 +140,7 @@ def build_model(n_class):
     else:
         model = torch.nn.DataParallel(model).cuda()
 
-    # define loss function (criterion) and optimizer
-
+    # define optimizer
     optimizer = torch.optim.SGD(model.parameters(), args.lr,
                                 momentum=args.momentum,
                                 weight_decay=args.weight_decay)
@@ -166,6 +165,11 @@ def build_model(n_class):
     return model, optimizer
 
 def main():
+    args.input_size = 299 if args.arch.startswith('inception') else 224
+    args.resize_size = 300 if args.arch.startswith('inception') else 256
+    pprint(vars(args))
+
+
     global best_prec1
     train_loader, val_loader, test_loader = load_data()
     model, optimizer = build_model(train_loader.dataset.n_class)
@@ -192,6 +196,7 @@ def main():
         is_best = prec1 > best_prec1
         best_prec1 = max(prec1, best_prec1)
 
+        # save checkpoint
         state = {
             'epoch': epoch + 1,
             'arch': args.arch,
@@ -204,6 +209,10 @@ def main():
         best_filename = 'models/best_models/{}_{}.pth.tar'.format(args.arch, class_name)
         save_checkpoint(state, is_best, filename, best_filename)
 
+
+        # tensorboad record
+        writer.add_scalar('val_prec', prec1, global_train_step)
+        writer.file_writer.flush()
 
 def train(train_loader, model, criterion, optimizer, epoch):
     batch_time = AverageMeter()
@@ -244,6 +253,7 @@ def train(train_loader, model, criterion, optimizer, epoch):
         batch_time.update(time.time() - end)
         end = time.time()
 
+        # print
         if (epoch == 0 and i < 50) or i % args.print_freq == 0:
             print('Epoch: [{0}/{1}][{2}/{3}]\t'
                   'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
@@ -253,6 +263,11 @@ def train(train_loader, model, criterion, optimizer, epoch):
                    epoch, args.epochs, i, len(train_loader), batch_time=batch_time,
                    data_time=data_time, loss=losses, prec=prec))
 
+        # tensorboard record
+        global global_train_step
+        writer.add_scalar('loss', losses.val, global_train_step)
+        writer.add_scalar('prec', prec.val, global_train_step)
+        global_train_step += 1
 
 def validate(val_loader, model, criterion):
     batch_time = AverageMeter()
