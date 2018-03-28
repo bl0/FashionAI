@@ -18,10 +18,11 @@ def write_results(df_load, test_np, save_path):
     df_load['result'] = result
     df_load.to_csv(save_path, header=None, index=False)
 
-def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
+def save_checkpoint(state, is_best, filename='checkpoint.pth.tar', best_filename='best.pth.tar'):
+    if not is_best:
+        return
     torch.save(state, filename)
-    if is_best:
-        shutil.copyfile(filename, 'model_best.pth.tar')
+    shutil.copyfile(filename, best_filename)
 
 class AverageMeter(object):
     """Computes and stores the average and current value"""

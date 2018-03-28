@@ -26,7 +26,7 @@ class FashionAIDataset(Dataset):
         self.img_dir = img_dir
         self.transform = transform
 
-        df = pd.read_csv(csv_file)
+        df = pd.read_csv(csv_file, header=None)
         df.columns = ['image_id', 'class', 'label']
 
         if class_name != "all":
@@ -62,7 +62,7 @@ class FashionAITestDataset(Dataset):
         self.img_dir = img_dir
         self.transform = transform
 
-        df = pd.read_csv(csv_file)
+        df = pd.read_csv(csv_file, header=None)
         df.columns = ['image_id', 'class', 'label']
         del df['label']
 

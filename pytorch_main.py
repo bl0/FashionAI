@@ -50,7 +50,7 @@ parser.add_argument('--start-epoch', default=0, type=int, metavar='N',
                     help='manual epoch number (useful on restarts)')
 parser.add_argument('-b', '--batch-size', default=64, type=int,
                     metavar='N', help='mini-batch size (default: 256)')
-parser.add_argument('--lr', '--learning-rate', default=0.1, type=float,
+parser.add_argument('--lr', '--learning-rate', default=0.001, type=float,
                     metavar='LR', help='initial learning rate')
 parser.add_argument('--momentum', default=0.9, type=float, metavar='M',
                     help='momentum')
@@ -199,8 +199,10 @@ def main():
             'best_prec1': best_prec1,
             'optimizer' : optimizer.state_dict(),
         }
+        # TODO: make dir models and set it to var?
         filename = "models/{}_{}_{}_checkpoint.pth.tar".format(args.arch, class_name, prec1)
-        save_checkpoint(state, is_best, filename)
+        best_filename = 'models/best_models/{}_{}.pth.tar'.format(args.arch, class_name)
+        save_checkpoint(state, is_best, filename, best_filename)
 
 
 def train(train_loader, model, criterion, optimizer, epoch):
@@ -243,12 +245,12 @@ def train(train_loader, model, criterion, optimizer, epoch):
         end = time.time()
 
         if (epoch == 0 and i < 50) or i % args.print_freq == 0:
-            print('Epoch: [{0}][{1}/{2}]\t'
+            print('Epoch: [{0}/{1}][{2}/{3}]\t'
                   'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
                   'Data {data_time.val:.3f} ({data_time.avg:.3f})\t'
                   'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
                   'Prec@1 {prec.val:.3f} ({prec.avg:.3f})'.format(
-                   epoch, i, len(train_loader), batch_time=batch_time,
+                   epoch, args.epochs, i, len(train_loader), batch_time=batch_time,
                    data_time=data_time, loss=losses, prec=prec))
 
 
@@ -307,6 +309,7 @@ def inference(test_loader, model):
 
     write_results(test_loader.dataset.df_load, results, save_path)
 
+    print('Inference done')
 
 def adjust_learning_rate(optimizer, epoch):
     """Sets the learning rate to the initial LR decayed by 10 every 30 epochs"""
