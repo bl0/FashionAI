@@ -5,27 +5,27 @@ class_names=('collar_design_labels' 'neckline_design_labels' 'skirt_length_label
 arch=resnet152
 gpu=$1
 
-for i in $(seq 0 7); do
+for i in $(seq 2 2); do {
 
 # train
 python pytorch_main.py \
     --arch ${arch} \
-    --epochs 100 \
-    --gpus $gpu \
+    --epochs 30 \
+    --gpus $i \
     --cur_class_idx $i \
     -b 32 \
-    --pretrain | tee logs/train_${arch}_log_$i.txt
+    --pretrain  | tee logs/train_${arch}_log_$i.txt
 
 # inference
 python pytorch_main.py \
     --arch ${arch} \
-    --gpus $gpu \
+    --gpus $i \
     --inference \
     --resume ./models/best_models/${arch}_${class_names[i]}.pth.tar \
     --cur_class_idx $i \
     --save_path ./results/${arch}
-
+} &
 done
 
 # cat all result to single file
-cat results/* > submit/0328b_${arch}.csv
+# cat results/* > submit/0328b_${arch}.csv
