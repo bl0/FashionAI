@@ -32,9 +32,9 @@ model_names = sorted(name for name in models.__dict__
 
 parser = argparse.ArgumentParser(description='PyTorch Fashion AI')
 parser.add_argument('--data', type=str, help='path to dataset', metavar='DIR',
-                    default='/runspace/liubin/tianchi2018_fashion-tag/data/fashionAI_attributes_train_20180222')
+                    default='/home/liujintao/runspace/data/fashionAI_attributes_train_20180222')
 parser.add_argument('--test-data', type=str, help='path to dataset', metavar='DIR',
-                    default='/runspace/liubin/tianchi2018_fashion-tag/data/fashionAI_attributes_test_a_20180222')
+                    default='/home/liujintao/runspace/data/fashionAI_attributes_test_a_20180222')
 parser.add_argument('--cur_class_idx', default=0, type=int, help='The index of label to classify, -1 for all')
 parser.add_argument('--arch', '-a', metavar='ARCH', default='resnet50',
                     choices=model_names,
