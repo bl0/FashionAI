@@ -188,7 +188,7 @@ def main():
         # evaluate on validation set
         prec1 = validate(val_loader, model, criterion)
 
-        # remember best prec@1 and save checkpoint
+        # remember best prec and save checkpoint
         is_best = prec1 > best_prec1
         best_prec1 = max(prec1, best_prec1)
 
@@ -249,7 +249,7 @@ def train(train_loader, model, criterion, optimizer, epoch):
                   'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
                   'Data {data_time.val:.3f} ({data_time.avg:.3f})\t'
                   'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
-                  'Prec@1 {prec.val:.3f} ({prec.avg:.3f})'.format(
+                  'Prec {prec.val:.3f} ({prec.avg:.3f})'.format(
                    epoch, args.epochs, i, len(train_loader), batch_time=batch_time,
                    data_time=data_time, loss=losses, prec=prec))
 
