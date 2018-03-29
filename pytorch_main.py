@@ -41,6 +41,14 @@ parser.add_argument('--arch', '-a', metavar='ARCH', default='resnet50',
                     help='model architecture: ' +
                         ' | '.join(model_names) +
                         ' (default: resnet18)')
+parser.add_argument('--tr_input_size', default=224, type=int,
+                    metavar='N', help='input size for training (default: 224)')
+parser.add_argument('--te_input_size', default=224, type=int,
+                    metavar='N', help='input size for testing (default: 224)')
+parser.add_argument('--te_resize_size', default=256, type=int,
+                    metavar='N', help='resize size for testing (default: 256)')
+parser.add_argument('--ten_crop', dest='ten_crop', action='store_true',
+                    help='use ten crop for testing data')
 parser.add_argument('-j', '--workers', default=12, type=int, metavar='N',
                     help='number of data loading workers (default: 4)')
 parser.add_argument('--epochs', default=10, type=int, metavar='N',
@@ -49,6 +57,8 @@ parser.add_argument('--start-epoch', default=0, type=int, metavar='N',
                     help='manual epoch number (useful on restarts)')
 parser.add_argument('-b', '--batch-size', default=64, type=int,
                     metavar='N', help='mini-batch size (default: 256)')
+parser.add_argument('-vb', '--val-batch-size', default=8, type=int,
+                    metavar='N', help='mini-batch size (default: 8)')
 parser.add_argument('--lr', '--learning-rate', default=0.001, type=float,
                     metavar='LR', help='initial learning rate')
 parser.add_argument('--momentum', default=0.9, type=float, metavar='M',
@@ -74,8 +84,13 @@ class_name = None
 os.environ["CUDA_VISIBLE_DEVICES"] = args.gpus
 
 # for tensorboard
-writer = SummaryWriter(os.path.join(args.tensorboard_log_path, '{}_{}'.format(args.arch, args.cur_class_idx)))
+name = '{}_{}_tri{}_ter{}_tei{}.pth.tar'.format(args.arch, args.cur_class_idx, args.tr_input_size, args.te_resize_size, args.te_input_size)
+if args.ten_crop:
+    name = '{}_{}'.format(args.arch, args.cur_class_idx)
+writer = SummaryWriter(os.path.join(args.tensorboard_log_path, name))
+
 # writer = SummaryWriter(args.tensorboard_log_path)
+
 global_train_step = 0
 
 def load_data():
@@ -94,15 +109,20 @@ def load_data():
         traindir, args.data,
         class_name=class_name,
         transform=transforms.Compose([
-            transforms.RandomResizedCrop(args.input_size),
+            transforms.RandomResizedCrop(args.tr_input_size),
             transforms.RandomHorizontalFlip(),
             transforms.ToTensor(),
             normalize,
         ]))
 
     val_transform = transforms.Compose([
-            transforms.Resize(args.resize_size),
-            transforms.CenterCrop(args.input_size),
+            transforms.Resize(args.te_resize_size),
+            transforms.TenCrop(args.te_input_size),
+            transforms.Lambda(lambda crops: torch.stack([transforms.ToTensor()(crop) for crop in crops])),
+            transforms.Lambda(lambda crops: torch.stack([normalize(crop) for crop in crops]))
+	]) if args.ten_crop else transforms.Compose([
+            transforms.Resize(args.te_resize_size),
+            transforms.CenterCrop(args.te_input_size),
             transforms.ToTensor(),
             normalize,
 	])
@@ -114,11 +134,11 @@ def load_data():
         num_workers=args.workers, pin_memory=True)
 
     val_loader = torch.utils.data.DataLoader(
-        val_dataset, batch_size=args.batch_size, shuffle=False,
+        val_dataset, batch_size=args.val_batch_size, shuffle=False,
         num_workers=args.workers, pin_memory=True)
 
     test_loader = torch.utils.data.DataLoader(
-        test_dataset, batch_size=args.batch_size, shuffle=False,
+        test_dataset, batch_size=args.val_batch_size, shuffle=False,
         num_workers=args.workers, pin_memory=True)
 
     return train_loader, val_loader, test_loader
@@ -132,6 +152,7 @@ def build_model(n_class):
     else:
         print("=> creating model '{}'".format(args.arch))
         model = models.__dict__[args.arch]()
+    model.avgpool = nn.AdaptiveAvgPool2d(1)
     model.fc = torch.nn.Linear(2048, n_class)
 
     if args.arch.startswith('alexnet') or args.arch.startswith('vgg'):
@@ -165,8 +186,6 @@ def build_model(n_class):
     return model, optimizer
 
 def main():
-    args.input_size = 299 if args.arch.startswith('inception') else 224
-    args.resize_size = 300 if args.arch.startswith('inception') else 256
     pprint(vars(args))
 
 
@@ -206,13 +225,16 @@ def main():
         }
         # TODO: make dir models and set it to var?
         filename = "models/{}_{}_{}_checkpoint.pth.tar".format(args.arch, class_name, prec1)
-        best_filename = 'models/best_models/{}_{}.pth.tar'.format(args.arch, class_name)
+        best_filename = 'models/best_models/{}_{}_tri{}_ter{}_tei{}.pth.tar'.format(args.arch, class_name, args.tr_input_size, args.te_resize_size, args.te_input_size)
         save_checkpoint(state, is_best, filename, best_filename)
 
 
         # tensorboad record
         writer.add_scalar('val_prec', prec1, global_train_step)
         writer.file_writer.flush()
+
+        # precision
+        print(' * Prec {prec:.3f}, bestPrec1 = {best_prec1:.3f}'.format(prec=prec1, best_prec1=best_prec1))
 
 def train(train_loader, model, criterion, optimizer, epoch):
     batch_time = AverageMeter()
@@ -280,11 +302,17 @@ def validate(val_loader, model, criterion):
     end = time.time()
     for i, (input, target) in enumerate(val_loader):
         target = target.cuda(async=True)
-        input_var = torch.autograd.Variable(input, volatile=True)
-        target_var = torch.autograd.Variable(target, volatile=True)
 
+        if args.ten_crop:
+            bs, ncrop, c, h, w = input.size()
+            input = input.view(-1, c, h, w)
+        input_var = torch.autograd.Variable(input, volatile=True)
         # compute output
         output = model(input_var)
+        if args.ten_crop:
+            output = output.view(bs, ncrop, -1).mean(1)
+        target_var = torch.autograd.Variable(target, volatile=True)
+
         loss = criterion(output, target_var)
 
         # measure accuracy and record loss
@@ -295,15 +323,15 @@ def validate(val_loader, model, criterion):
         batch_time.update(time.time() - end)
         end = time.time()
 
+        a = len(val_loader.batch_sampler)
         if i % args.print_freq == 0:
             print('Test: [{0}/{1}]\t'
-                  'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
-                  'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
-                  'Prec {prec.val:.3f} ({prec.avg:.3f})'.format(
-                   i, len(val_loader), batch_time=batch_time,
-                   loss=losses, prec=prec))
+                'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
+                'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
+                'Prec {prec.val:.3f} ({prec.avg:.3f})'.format(
+                i, len(val_loader), batch_time=batch_time,
+                loss=losses, prec=prec))
 
-    print(' * Prec {prec.avg:.3f}'.format(prec=prec))
     return prec.avg
 
 
@@ -312,8 +340,16 @@ def inference(test_loader, model):
     model.eval()
     results = []
     for i, input in enumerate(test_loader):
+        if args.ten_crop:
+            bs, ncrop, c, h, w = input.size()
+            input = input.view(-1, c, h, w)
         input_var = torch.autograd.Variable(input, volatile=True)
         output = model(input_var)
+
+        # compute output
+        if args.ten_crop:
+            output = output.view(bs, ncrop, -1).mean(1)
+
         pred = torch.nn.functional.softmax(output, 1)
         results.append(pred.data.cpu().numpy())
     results = np.concatenate(results)
