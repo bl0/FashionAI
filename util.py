@@ -3,6 +3,7 @@
 
 import torch
 import shutil
+import numpy as np
 
 def write_results(df_load, test_np, save_path):
     result = []
@@ -46,3 +47,17 @@ def accuracy(output, target):
     _, pred = output.max(1)
     correct = pred.eq(target).float()
     return correct.sum(0).mul_(100.0 / target.size(0))
+
+def accuracy_all(output, target, idx):
+    """Computes the precision@k for the specified values of k"""
+    idx_cum = np.cumsum(idx, 1)
+    idx_1 = np.array(np.where(idx_cum == 1))
+    real_output = torch.mul(output, idx.float().cuda())
+
+    _, pred = real_output.max(1)
+    pred = pred - torch.from_numpy(idx_1[1]).cuda()
+    
+    correct = pred.eq(target).float()
+    return correct.sum(0).mul_(100.0 / target.size(0))
+
+

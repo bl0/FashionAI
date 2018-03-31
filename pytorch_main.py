@@ -15,7 +15,7 @@ import torch.utils.data
 import torchvision.transforms as transforms
 import torchvision.models as models
 
-from util import save_checkpoint, AverageMeter, accuracy, write_results
+from util import save_checkpoint, AverageMeter, accuracy, accuracy_all, write_results
 from fashionai_dataset import FashionAIDataset, FashionAITestDataset, classes
 
 from pprint import pprint
@@ -32,9 +32,9 @@ model_names = sorted(name for name in models.__dict__
 
 parser = argparse.ArgumentParser(description='PyTorch Fashion AI')
 parser.add_argument('--data', type=str, help='path to dataset', metavar='DIR',
-                    default='/home/liujintao/runspace/data/fashionAI_attributes_train_20180222')
+                    default='/home/liujintao/runspace/FashionAI/data/fashionAI_attributes_train_20180222')
 parser.add_argument('--test-data', type=str, help='path to dataset', metavar='DIR',
-                    default='/home/liujintao/runspace/data/fashionAI_attributes_test_a_20180222')
+                    default='/home/liujintao/runspace/FashionAI/data/fashionAI_attributes_test_a_20180222')
 parser.add_argument('--cur_class_idx', default=0, type=int, help='The index of label to classify, -1 for all')
 parser.add_argument('--arch', '-a', metavar='ARCH', default='resnet50',
                     choices=model_names,
@@ -73,6 +73,15 @@ best_prec1 = 0
 class_name = None
 os.environ["CUDA_VISIBLE_DEVICES"] = args.gpus
 
+classes_len = {'collar_design_labels':0,
+                  'neckline_design_labels':5,
+                  'skirt_length_labels':15,
+                  'sleeve_length_labels':21,
+                  'neck_design_labels':30,
+                  'coat_length_labels':35,
+                  'lapel_design_labels':43,
+                  'pant_length_labels':48}
+
 # for tensorboard
 writer = SummaryWriter(os.path.join(args.tensorboard_log_path, '{}_{}'.format(args.arch, args.cur_class_idx)))
 # writer = SummaryWriter(args.tensorboard_log_path)
@@ -81,7 +90,10 @@ global_train_step = 0
 def load_data():
     global class_name
     if args.cur_class_idx == -1:
-        print("not supported yet")
+        class_name = 'all'
+        traindir = os.path.join(args.data, 'train', 'all_labels.csv')
+        valdir = os.path.join(args.data, 'val', 'all_labels.csv')
+        #print("not supported yet")
     else:
         class_name = classes[args.cur_class_idx]
         traindir = os.path.join(args.data, 'train', class_name + '.csv')
@@ -123,7 +135,6 @@ def load_data():
 
     return train_loader, val_loader, test_loader
 
-
 def build_model(n_class):
     # create model
     if args.pretrained:
@@ -132,6 +143,11 @@ def build_model(n_class):
     else:
         print("=> creating model '{}'".format(args.arch))
         model = models.__dict__[args.arch]()
+
+    # remove fc layer
+    #removed = list(model.children())[:-1]
+    #model= torch.nn.Sequential(*self.removed)
+
     model.fc = torch.nn.Linear(2048, n_class)
 
     if args.arch.startswith('alexnet') or args.arch.startswith('vgg'):
@@ -214,6 +230,27 @@ def main():
         writer.add_scalar('val_prec', prec1, global_train_step)
         writer.file_writer.flush()
 
+def weighted_softmax_loss(output, target, weight):
+    output_e = torch.exp(output)
+    
+    weighted_output_e = torch.mul(output_e, torch.autograd.Variable(weight).float().cuda())
+    output_sum = torch.sum(weighted_output_e, dim=1)
+    
+    # weight is like [0,0,0,1,1,1,0,0,0]
+    # find the first value 1 for each row
+    # idx -> N*2, including the indexes
+    weight_cum = np.cumsum(weight, 1)
+    idx = np.array(np.where(weight_cum == 1))
+    
+    # target -> N*1, indicating which is the label
+    idx[1] = idx[1] + target.cpu().data.numpy()
+    
+    # loss = - log( e^y / sum) = log sum - y
+    output_t = output[idx]
+    final_loss = torch.mean(torch.log(output_sum) - output_t)
+    return final_loss
+
+
 def train(train_loader, model, criterion, optimizer, epoch):
     batch_time = AverageMeter()
     data_time = AverageMeter()
@@ -224,7 +261,7 @@ def train(train_loader, model, criterion, optimizer, epoch):
     model.train()
 
     end = time.time()
-    for i, (input, target) in enumerate(train_loader):
+    for i, (input, target, idx) in enumerate(train_loader):
         # measure data loading time
         data_time.update(time.time() - end)
 
@@ -238,11 +275,12 @@ def train(train_loader, model, criterion, optimizer, epoch):
         if args.arch == 'inception_v3':
             output = output[0]
 
-        loss = criterion(output, target_var)
+        # new weighted softmax loss
+        loss = weighted_softmax_loss(output, target_var, idx)
 
         # measure accuracy and record loss
         losses.update(loss.data[0], input.size(0))
-        prec.update(accuracy(output.data, target)[0], input.size(0))
+        prec.update(accuracy_all(output.data, target, idx)[0], input.size(0))
 
         # compute gradient and do SGD step
         optimizer.zero_grad()
@@ -278,18 +316,20 @@ def validate(val_loader, model, criterion):
     model.eval()
 
     end = time.time()
-    for i, (input, target) in enumerate(val_loader):
+    # TODO
+    for i, (input, target, idx) in enumerate(val_loader):
         target = target.cuda(async=True)
         input_var = torch.autograd.Variable(input, volatile=True)
         target_var = torch.autograd.Variable(target, volatile=True)
 
         # compute output
         output = model(input_var)
-        loss = criterion(output, target_var)
+        #loss = criterion(output, target_var)
+        loss = weighted_softmax_loss(output, target_var, idx)
 
         # measure accuracy and record loss
         losses.update(loss.data[0], input.size(0))
-        prec.update(accuracy(output.data, target)[0], input.size(0))
+        prec.update(accuracy_all(output.data, target, idx)[0], input.size(0))
 
         # measure elapsed time
         batch_time.update(time.time() - end)
@@ -311,13 +351,16 @@ def inference(test_loader, model):
     # switch to evaluate mode
     model.eval()
     results = []
-    for i, input in enumerate(test_loader):
+    for i, (input, idx) in enumerate(test_loader):
         input_var = torch.autograd.Variable(input, volatile=True)
         output = model(input_var)
-        pred = torch.nn.functional.softmax(output, 1)
-        results.append(pred.data.cpu().numpy())
-    results = np.concatenate(results)
-
+        
+        real_output = torch.mul(output, torch.autograd.Variable(idx).float().cuda())
+        
+        for i in range(real_output.size()[0]):
+            append_value = torch.nn.functional.softmax(real_output[i][real_output[i]!= 0].float())
+            results.append(append_value.data.cpu().numpy())
+    
     save_path = os.path.join(args.save_path, class_name+".csv")
     if not os.path.exists(args.save_path):
         os.makedirs(args.save_path)
