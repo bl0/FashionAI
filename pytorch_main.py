@@ -65,7 +65,8 @@ parser.add_argument('--pretrained', dest='pretrained', action='store_true',
                     help='use pre-trained model')
 parser.add_argument('--gpus', default='5', type=str, metavar='GPU', help='id of gpu')
 parser.add_argument('--inference', dest='inference', action='store_true',  help='inference test data')
-parser.add_argument('--save_path', default='./results', type=str, metavar='PATH', help='folder to save result file')
+parser.add_argument('--result_path', default='./results', type=str, metavar='PATH', help='folder to save result')
+parser.add_argument('--model_save_path', default='./models', type=str, metavar='PATH', help='folder to save models')
 parser.add_argument('--tensorboard_log_path', default='./tensorboard_log', type=str, metavar='PATH', help='folder to place tensorboard logs')
 
 args = parser.parse_args()
@@ -220,11 +221,12 @@ def main():
             'best_prec1': best_prec1,
             'optimizer' : optimizer.state_dict(),
         }
-        # TODO: make dir models and set it to var?
-        filename = "models/{}_{}_{}_checkpoint.pth.tar".format(args.arch, class_name, prec1)
-        best_filename = 'models/best_models/{}_{}.pth.tar'.format(args.arch, class_name)
+        best_path = os.path.join(args.model_save_path, 'best_models')
+        if not os.path.exists(best_path):
+            os.makedirs(best_path)
+        filename = "{}/{}_{}_{}_checkpoint.pth.tar".format(args.model_save_path, args.arch, class_name, prec1)
+        best_filename = '{}/{}_{}.pth.tar'.format(best_path, args.arch, class_name)
         save_checkpoint(state, is_best, filename, best_filename)
-
 
         # tensorboad record
         writer.add_scalar('val_prec', prec1, global_train_step)
