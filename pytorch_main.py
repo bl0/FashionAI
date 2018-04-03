@@ -15,8 +15,15 @@ import torch.utils.data
 import torchvision.transforms as transforms
 import torchvision.models as models
 
-from util import save_checkpoint, AverageMeter, accuracy, accuracy_all, write_results
-from fashionai_dataset import FashionAIDataset, FashionAITestDataset, classes
+from util import save_checkpoint
+from util import AverageMeter
+from util import accuracy_all
+from util import write_results
+from util import weighted_softmax_loss
+from util import MAP
+from fashionai_dataset import FashionAIDataset
+from fashionai_dataset import FashionAITestDataset
+from fashionai_dataset import classes
 
 from pprint import pprint
 import warnings
@@ -32,9 +39,9 @@ model_names = sorted(name for name in models.__dict__
 
 parser = argparse.ArgumentParser(description='PyTorch Fashion AI')
 parser.add_argument('--data', type=str, help='path to dataset', metavar='DIR',
-                    default='/home/liujintao/runspace/FashionAI/data/fashionAI_attributes_train_20180222')
+                    default='/runspace/liubin/tianchi2018_fashion-tag/data/fashionAI_attributes_train_20180222')
 parser.add_argument('--test-data', type=str, help='path to dataset', metavar='DIR',
-                    default='/home/liujintao/runspace/FashionAI/data/fashionAI_attributes_test_a_20180222')
+                    default='/runspace/liubin/tianchi2018_fashion-tag/data/fashionAI_attributes_test_a_20180222')
 parser.add_argument('--cur_class_idx', default=0, type=int, help='The index of label to classify, -1 for all')
 parser.add_argument('--arch', '-a', metavar='ARCH', default='resnet50',
                     choices=model_names,
@@ -80,7 +87,7 @@ parser.add_argument('--model_save_path', default='./models', type=str, metavar='
 parser.add_argument('--tensorboard_log_path', default='./tensorboard_log', type=str, metavar='PATH', help='folder to place tensorboard logs')
 
 args = parser.parse_args()
-best_prec1 = 0
+best_mAP = 0
 class_name = None
 os.environ["CUDA_VISIBLE_DEVICES"] = args.gpus
 
@@ -182,11 +189,11 @@ def build_model(n_class):
     # optionally resume from a checkpoint
     if args.resume:
         if os.path.isfile(args.resume):
-            global best_prec1
+            global best_mAP
             print("=> loading checkpoint '{}'".format(args.resume))
             checkpoint = torch.load(args.resume)
             args.start_epoch = checkpoint['epoch']
-            best_prec1 = checkpoint['best_prec1']
+            best_mAP = checkpoint['best_mAP']
             model.load_state_dict(checkpoint['state_dict'])
             optimizer.load_state_dict(checkpoint['optimizer'])
             print("=> loaded checkpoint '{}' (epoch {})"
@@ -202,7 +209,7 @@ def main():
     pprint(vars(args))
 
 
-    global best_prec1
+    global best_mAP
     train_loader, val_loader, test_loader = load_data()
     model, optimizer = build_model(train_loader.dataset.n_class)
     criterion = nn.CrossEntropyLoss().cuda()
@@ -222,55 +229,35 @@ def main():
         train(train_loader, model, criterion, optimizer, epoch)
 
         # evaluate on validation set
-        prec1 = validate(val_loader, model, criterion)
+        mAP, prec = validate(val_loader, model, criterion)
 
-        # remember best prec and save checkpoint
-        is_best = prec1 > best_prec1
-        best_prec1 = max(prec1, best_prec1)
+        # remember best mAP and save checkpoint
+        is_best = mAP > best_mAP
+        best_mAP = max(mAP, best_mAP)
 
         # save checkpoint
         state = {
             'epoch': epoch + 1,
             'arch': args.arch,
             'state_dict': model.state_dict(),
-            'best_prec1': best_prec1,
+            'best_mAP': best_mAP,
             'optimizer' : optimizer.state_dict(),
         }
         best_path = os.path.join(args.model_save_path, 'best_models')
         if not os.path.exists(best_path):
             os.makedirs(best_path)
-        filename = "{}/{}_{}_{}_checkpoint.pth.tar".format(args.model_save_path, args.arch, class_name, prec1)
+        filename = "{}/{}_{}_{}_checkpoint.pth.tar".format(args.model_save_path, args.arch, class_name, mAP)
         best_filename = '{}/{}_{}.pth.tar'.format(best_path, args.arch, class_name)
 
         save_checkpoint(state, is_best, filename, best_filename)
 
         # tensorboad record
-        writer.add_scalar('val_prec', prec1, global_train_step)
+        writer.add_scalar('val_prec', prec, global_train_step)
+        writer.add_scalar('val_mAP', mAP, global_train_step)
         writer.file_writer.flush()
 
-        # precision
-        print(' * Prec {prec:.3f}, bestPrec1 = {best_prec1:.3f}'.format(prec=prec1, best_prec1=best_prec1))
-
-def weighted_softmax_loss(output, target, weight):
-    output_e = torch.exp(output)
-
-    weighted_output_e = torch.mul(output_e, torch.autograd.Variable(weight).float().cuda())
-    output_sum = torch.sum(weighted_output_e, dim=1)
-
-    # weight is like [0,0,0,1,1,1,0,0,0]
-    # find the first value 1 for each row
-    # idx -> N*2, including the indexes
-    weight_cum = np.cumsum(weight, 1)
-    idx = np.array(np.where(weight_cum == 1))
-
-    # target -> N*1, indicating which is the label
-    idx[1] = idx[1] + target.cpu().data.numpy()
-
-    # loss = - log( e^y / sum) = log sum - y
-    output_t = output[idx]
-    final_loss = torch.mean(torch.log(output_sum) - output_t)
-    return final_loss
-
+        # mAP
+        print(' * best mAP = {best_mAP:.3f}'.format(best_mAP=best_mAP))
 
 def train(train_loader, model, criterion, optimizer, epoch):
     batch_time = AverageMeter()
@@ -336,9 +323,12 @@ def validate(val_loader, model, criterion):
     # switch to evaluate mode
     model.eval()
 
+    output_all, target_all, idx_all = [], [], []
     end = time.time()
-    # TODO
     for i, (input, target, idx) in enumerate(val_loader):
+        target_all.append(target)
+        idx_all.append(idx)
+
         target = target.cuda(async=True)
 
         if args.ten_crop:
@@ -350,6 +340,7 @@ def validate(val_loader, model, criterion):
         output = model(input_var)
         if args.ten_crop:
             output = output.view(bs, ncrop, -1).mean(1)
+        output_all.append(output.cpu().data.numpy())
         target_var = torch.autograd.Variable(target, volatile=True)
 
         #loss = criterion(output, target_var)
@@ -372,7 +363,13 @@ def validate(val_loader, model, criterion):
                 i, len(val_loader), batch_time=batch_time,
                 loss=losses, prec=prec))
 
-    return prec.avg
+    output_all = np.concatenate(output_all)
+    target_all = np.concatenate(target_all)
+    idx_all = np.concatenate(idx_all)
+    mAP = MAP(output_all, target_all, idx_all)
+
+    print(' * Prec {prec:.3f}, mAP = {mAP:.3f}'.format(prec=prec.avg, mAP=mAP))
+    return mAP, prec.avg
 
 
 def inference(test_loader, model):
@@ -393,8 +390,8 @@ def inference(test_loader, model):
 
         real_output = torch.mul(output, torch.autograd.Variable(idx).float().cuda())
 
-        for i in range(real_output.size()[0]):
-            append_value = torch.nn.functional.softmax(real_output[i][real_output[i]!= 0].float())
+        for j in range(real_output.size()[0]):
+            append_value = torch.nn.functional.softmax(real_output[j][real_output[j]!= 0].float())
             results.append(append_value.data.cpu().numpy())
 
     save_path = os.path.join(args.result_path, class_name+".csv")
