@@ -165,10 +165,6 @@ def build_model(n_class):
         print("=> creating model '{}'".format(args.arch))
         model = models.__dict__[args.arch]()
 
-    # remove fc layer
-    #removed = list(model.children())[:-1]
-    #model= torch.nn.Sequential(*self.removed)
-
     model.avgpool = nn.AdaptiveAvgPool2d(1)
     model.fc = torch.nn.Linear(2048, n_class)
 
@@ -251,25 +247,25 @@ def main():
         # tensorboad record
         writer.add_scalar('val_prec', prec1, global_train_step)
         writer.file_writer.flush()
-        
+
         # precision
         print(' * Prec {prec:.3f}, bestPrec1 = {best_prec1:.3f}'.format(prec=prec1, best_prec1=best_prec1))
 
 def weighted_softmax_loss(output, target, weight):
     output_e = torch.exp(output)
-    
+
     weighted_output_e = torch.mul(output_e, torch.autograd.Variable(weight).float().cuda())
     output_sum = torch.sum(weighted_output_e, dim=1)
-    
+
     # weight is like [0,0,0,1,1,1,0,0,0]
     # find the first value 1 for each row
     # idx -> N*2, including the indexes
     weight_cum = np.cumsum(weight, 1)
     idx = np.array(np.where(weight_cum == 1))
-    
+
     # target -> N*1, indicating which is the label
     idx[1] = idx[1] + target.cpu().data.numpy()
-    
+
     # loss = - log( e^y / sum) = log sum - y
     output_t = output[idx]
     final_loss = torch.mean(torch.log(output_sum) - output_t)
@@ -358,7 +354,7 @@ def validate(val_loader, model, criterion):
 
         #loss = criterion(output, target_var)
         loss = weighted_softmax_loss(output, target_var, idx)
-        
+
         # measure accuracy and record loss
         losses.update(loss.data[0], input.size(0))
         prec.update(accuracy_all(output.data, target, idx)[0], input.size(0))
@@ -394,13 +390,13 @@ def inference(test_loader, model):
 
         if args.ten_crop:
             output = output.view(bs, ncrop, -1).mean(1)
-        
+
         real_output = torch.mul(output, torch.autograd.Variable(idx).float().cuda())
-        
+
         for i in range(real_output.size()[0]):
             append_value = torch.nn.functional.softmax(real_output[i][real_output[i]!= 0].float())
             results.append(append_value.data.cpu().numpy())
-    
+
     save_path = os.path.join(args.result_path, class_name+".csv")
     if not os.path.exists(args.result_path):
         os.makedirs(args.result_path)
