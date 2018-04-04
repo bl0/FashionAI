@@ -106,8 +106,6 @@ if args.ten_crop:
     name = '{}_{}'.format(args.arch, args.cur_class_idx)
 writer = SummaryWriter(os.path.join(args.tensorboard_log_path, name))
 
-# writer = SummaryWriter(args.tensorboard_log_path)
-
 global_train_step = 0
 
 def load_data(opts):
@@ -409,6 +407,7 @@ def inference(test_loader, model):
 def adjust_learning_rate(optimizer, epoch):
     """Sets the learning rate to the initial LR decayed by 10 every 30 epochs"""
     lr = args.lr * (0.1 ** (epoch // 20))
+    writer.add_scalar('lr', lr, global_train_step)
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
 
