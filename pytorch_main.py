@@ -28,43 +28,43 @@ from fashionai_dataset import classes
 from pprint import pprint
 import warnings
 from tensorboardX import SummaryWriter
+import pretrainedmodels
 
 warnings.filterwarnings("ignore")
 
-
-model_names = sorted(name for name in models.__dict__
-        if name.islower() and not name.startswith("__")
-        and callable(models.__dict__[name]))
-
+model_names = pretrainedmodels.model_names
 
 parser = argparse.ArgumentParser(description='PyTorch Fashion AI')
 parser.add_argument('--data', type=str, help='path to dataset', metavar='DIR',
                     default='/runspace/liubin/tianchi2018_fashion-tag/data/fashionAI_attributes_train_20180222')
 parser.add_argument('--test-data', type=str, help='path to dataset', metavar='DIR',
                     default='/runspace/liubin/tianchi2018_fashion-tag/data/fashionAI_attributes_test_a_20180222')
-parser.add_argument('--cur_class_idx', default=0, type=int, help='The index of label to classify, -1 for all')
-parser.add_argument('--arch', '-a', metavar='ARCH', default='resnet50',
+parser.add_argument('--cur_class_idx', default=-1, type=int, help='The index of label to classify, -1 for all')
+parser.add_argument('--arch', '-a', metavar='ARCH', default='resnet152',
                     choices=model_names,
                     help='model architecture: ' +
-                        ' | '.join(model_names) +
-                        ' (default: resnet18)')
+                        ' | '.join(model_names))
 parser.add_argument('--tr_input_size', default=224, type=int,
                     metavar='N', help='input size for training (default: 224)')
 parser.add_argument('--te_input_size', default=224, type=int,
                     metavar='N', help='input size for testing (default: 224)')
 parser.add_argument('--te_resize_size', default=256, type=int,
                     metavar='N', help='resize size for testing (default: 256)')
-parser.add_argument('--ten_crop', dest='ten_crop', action='store_true',
-                    help='use ten crop for testing data')
+
+ten_crop_parser = parser.add_mutually_exclusive_group(required=False)
+ten_crop_parser.add_argument('--ten_crop', dest='ten_crop', action='store_true')
+ten_crop_parser.add_argument('--no_ten_crop', dest='ten_crop', action='store_false')
+parser.set_defaults(ten_crop=True)
+
 parser.add_argument('-j', '--workers', default=12, type=int, metavar='N',
                     help='number of data loading workers (default: 4)')
-parser.add_argument('--epochs', default=10, type=int, metavar='N',
+parser.add_argument('--epochs', default=30, type=int, metavar='N',
                     help='number of total epochs to run')
 parser.add_argument('--start-epoch', default=0, type=int, metavar='N',
                     help='manual epoch number (useful on restarts)')
-parser.add_argument('-b', '--batch-size', default=64, type=int,
+parser.add_argument('-b', '--batch-size', default=256, type=int,
                     metavar='N', help='mini-batch size (default: 256)')
-parser.add_argument('-vb', '--val-batch-size', default=8, type=int,
+parser.add_argument('-vb', '--val-batch-size', default=256, type=int,
                     metavar='N', help='mini-batch size (default: 8)')
 parser.add_argument('--lr', '--learning-rate', default=0.001, type=float,
                     metavar='LR', help='initial learning rate')
@@ -110,42 +110,42 @@ writer = SummaryWriter(os.path.join(args.tensorboard_log_path, name))
 
 global_train_step = 0
 
-def load_data():
+def load_data(opts):
     global class_name
+
     if args.cur_class_idx == -1:
         class_name = 'all'
         traindir = os.path.join(args.data, 'train', 'all_labels.csv')
         valdir = os.path.join(args.data, 'val', 'all_labels.csv')
-        #print("not supported yet")
     else:
         class_name = classes[args.cur_class_idx]
         traindir = os.path.join(args.data, 'train', class_name + '.csv')
         valdir = os.path.join(args.data, 'val', class_name + '.csv')
     testdir = os.path.join(args.test_data, 'Tests', 'question.csv')
-    normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                     std=[0.229, 0.224, 0.225])
+
+    normalize = transforms.Normalize(mean=opts.mean, std=opts.std)
 
     train_dataset = FashionAIDataset(
         traindir, args.data,
         class_name=class_name,
         transform=transforms.Compose([
-            transforms.RandomResizedCrop(args.tr_input_size),
+            transforms.RandomResizedCrop(max(opts.input_size)), # TODO: if input size not fixed
             transforms.RandomHorizontalFlip(),
             transforms.ToTensor(),
             normalize,
         ]))
 
-    val_transform = transforms.Compose([
-            transforms.Resize(args.te_resize_size),
-            transforms.TenCrop(args.te_input_size),
-            transforms.Lambda(lambda crops: torch.stack([transforms.ToTensor()(crop) for crop in crops])),
-            transforms.Lambda(lambda crops: torch.stack([normalize(crop) for crop in crops]))
-	]) if args.ten_crop else transforms.Compose([
-            transforms.Resize(args.te_resize_size),
-            transforms.CenterCrop(args.te_input_size),
-            transforms.ToTensor(),
-            normalize,
-	])
+    if args.ten_crop:
+        crop = transforms.TenCrop(max(opts.input_size))
+        to_tensor = transforms.Lambda(lambda crops: torch.stack([transforms.ToTensor()(crop) for crop in crops]))
+        norm = transforms.Lambda(lambda crops: torch.stack([normalize(crop) for crop in crops]))
+    else:
+        crop = transforms.CenterCrop(max(opts.input_size))
+        to_tensor = transforms.ToTensor()
+        norm = normalize
+    resize = transforms.Resize(args.te_resize_size)
+    val_transform = transforms.Compose([resize, crop, to_tensor, norm])
+
     val_dataset = FashionAIDataset(valdir, args.data, class_name=class_name, transform=val_transform)
     test_dataset = FashionAITestDataset(testdir, args.test_data, class_name=class_name, transform=val_transform)
 
@@ -163,23 +163,26 @@ def load_data():
 
     return train_loader, val_loader, test_loader
 
-def build_model(n_class):
+def build_model():
+    n_classes = [5, 10, 6, 9, 5, 8, 5, 6]
+    if args.cur_class_idx == -1:
+        n_class = sum(n_classes)
+    else:
+        n_class = n_classes[cur_class_idx]
+
     # create model
     if args.pretrained:
         print("=> using pre-trained model '{}'".format(args.arch))
-        model = models.__dict__[args.arch](pretrained=True)
+        model = pretrainedmodels.__dict__[args.arch](num_classes=1000)
     else:
         print("=> creating model '{}'".format(args.arch))
-        model = models.__dict__[args.arch]()
+        model = pretrainedmodels.__dict__[args.arch](num_classes=1000, pretrained=None)
 
-    model.avgpool = nn.AdaptiveAvgPool2d(1)
-    model.fc = torch.nn.Linear(2048, n_class)
-
-    if args.arch.startswith('alexnet') or args.arch.startswith('vgg'):
-        model.features = torch.nn.DataParallel(model.features)
-        model.cuda()
+    # model.avgpool = nn.AdaptiveAvgPool2d(1)
+    if args.arch.startswith('dpn'):
+        model.classifier = nn.Conv2d(model.classifier.in_channels, n_class, kernel_size=1, bias=True)
     else:
-        model = torch.nn.DataParallel(model).cuda()
+        model.last_linear = torch.nn.Linear(model.last_linear.in_features, n_class)
 
     # define optimizer
     optimizer = torch.optim.SGD(model.parameters(), args.lr,
@@ -201,6 +204,7 @@ def build_model(n_class):
         else:
             print("=> no checkpoint found at '{}'".format(args.resume))
 
+    model = torch.nn.DataParallel(model).cuda()
     cudnn.benchmark = True
 
     return model, optimizer
@@ -208,10 +212,9 @@ def build_model(n_class):
 def main():
     pprint(vars(args))
 
-
     global best_mAP
-    train_loader, val_loader, test_loader = load_data()
-    model, optimizer = build_model(train_loader.dataset.n_class)
+    model, optimizer = build_model()
+    train_loader, val_loader, test_loader = load_data(model.module)
     criterion = nn.CrossEntropyLoss().cuda()
 
     if args.inference:
@@ -248,15 +251,16 @@ def main():
             os.makedirs(best_path)
         filename = "{}/{}_{}_{}_checkpoint.pth.tar".format(args.model_save_path, args.arch, class_name, mAP)
         best_filename = '{}/{}_{}.pth.tar'.format(best_path, args.arch, class_name)
-
         save_checkpoint(state, is_best, filename, best_filename)
 
         # tensorboad record
         writer.add_scalar('val_prec', prec, global_train_step)
         writer.add_scalar('val_mAP', mAP, global_train_step)
+        writer.add_scalar('val_prec_epoch', prec, epoch)
+        writer.add_scalar('val_mAP_epoch', mAP, epoch)
         writer.file_writer.flush()
 
-        # mAP
+        # print mAP
         print(' * best mAP = {best_mAP:.3f}'.format(best_mAP=best_mAP))
 
 def train(train_loader, model, criterion, optimizer, epoch):
@@ -273,6 +277,7 @@ def train(train_loader, model, criterion, optimizer, epoch):
         # measure data loading time
         data_time.update(time.time() - end)
 
+        # convert to variable
         target = target.cuda(async=True)
         input_var = torch.autograd.Variable(input)
         target_var = torch.autograd.Variable(target)
@@ -354,7 +359,6 @@ def validate(val_loader, model, criterion):
         batch_time.update(time.time() - end)
         end = time.time()
 
-        a = len(val_loader.batch_sampler)
         if i % args.print_freq == 0:
             print('Test: [{0}/{1}]\t'
                 'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
@@ -375,8 +379,8 @@ def validate(val_loader, model, criterion):
 def inference(test_loader, model):
     # switch to evaluate mode
     model.eval()
-    results = []
 
+    results = []
     for i, (input, idx) in enumerate(test_loader):
         if args.ten_crop:
             bs, ncrop, c, h, w = input.size()
@@ -394,10 +398,10 @@ def inference(test_loader, model):
             append_value = torch.nn.functional.softmax(real_output[j][real_output[j]!= 0].float())
             results.append(append_value.data.cpu().numpy())
 
+    # write results to file
     save_path = os.path.join(args.result_path, class_name+".csv")
     if not os.path.exists(args.result_path):
         os.makedirs(args.result_path)
-
     write_results(test_loader.dataset.df_load, results, save_path)
 
     print('Inference done')
