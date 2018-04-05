@@ -4,6 +4,7 @@
 import argparse
 import os
 import time
+import math 
 
 import torch
 import numpy as np
@@ -70,8 +71,12 @@ parser.add_argument('--lr', '--learning-rate', default=0.001, type=float,
                     metavar='LR', help='initial learning rate')
 parser.add_argument('--momentum', default=0.9, type=float, metavar='M',
                     help='momentum')
+parser.add_argument('--opt', default='SGD', type=str, metavar='OPT',
+                    help='optimizer')
 parser.add_argument('--weight-decay', '--wd', default=1e-4, type=float,
                     metavar='W', help='weight decay (default: 1e-4)')
+parser.add_argument('--decay_type', '--dt', default='cosine', type=str,
+                    metavar='Decay Type', help='Decay type, cosine or multistep')
 parser.add_argument('--print-freq', '-p', default=10, type=int,
                     metavar='N', help='print frequency (default: 10)')
 parser.add_argument('--resume', default='', type=str, metavar='PATH',
@@ -87,6 +92,8 @@ parser.add_argument('--model_save_path', default='./models', type=str, metavar='
 parser.add_argument('--tensorboard_log_path', default='./tensorboard_log', type=str, metavar='PATH', help='folder to place tensorboard logs')
 
 args = parser.parse_args()
+args.opt = args.opt.lower()
+
 best_mAP = 0
 class_name = None
 os.environ["CUDA_VISIBLE_DEVICES"] = args.gpus
@@ -101,9 +108,7 @@ classes_len = {'collar_design_labels':0,
                   'pant_length_labels':48}
 
 # for tensorboard
-name = '{}_{}_tri{}_ter{}_tei{}.pth.tar'.format(args.arch, args.cur_class_idx, args.tr_input_size, args.te_resize_size, args.te_input_size)
-if args.ten_crop:
-    name = '{}_{}'.format(args.arch, args.cur_class_idx)
+name = '{args.arch}_{args.cur_class_idx}_{args.opt}_{args.decay_type}_lr_{args.lr}'.format(args=args)
 writer = SummaryWriter(os.path.join(args.tensorboard_log_path, name))
 
 global_train_step = 0
@@ -183,9 +188,16 @@ def build_model():
         model.last_linear = torch.nn.Linear(model.last_linear.in_features, n_class)
 
     # define optimizer
-    optimizer = torch.optim.SGD(model.parameters(), args.lr,
-                                momentum=args.momentum,
-                                weight_decay=args.weight_decay)
+    if args.opt== "adam":
+        optimizer = torch.optim.Adam(model.parameters(), args.lr)
+    elif args.opt == 'sgd':
+        optimizer = torch.optim.SGD(model.parameters(), args.lr,
+                                    momentum=args.momentum,
+                                    weight_decay=args.weight_decay)
+    elif args.opt == 'adadelta':
+        optimizer = torch.optim.Adadelta(model.parameters(), args.lr)
+    else:
+        print('Not supported yet')
 
     # optionally resume from a checkpoint
     if args.resume:
@@ -224,8 +236,6 @@ def main():
         return
 
     for epoch in range(args.start_epoch, args.epochs):
-        adjust_learning_rate(optimizer, epoch)
-
         # train for one epoch
         train(train_loader, model, criterion, optimizer, epoch)
 
@@ -274,6 +284,9 @@ def train(train_loader, model, criterion, optimizer, epoch):
     for i, (input, target, idx) in enumerate(train_loader):
         # measure data loading time
         data_time.update(time.time() - end)
+
+        if args.opt == 'sgd':
+            adjust_learning_rate(optimizer, epoch, args, batch=i, n_batch=len(train_loader), method=args.decay_type)
 
         # convert to variable
         target = target.cuda(async=True)
@@ -404,9 +417,14 @@ def inference(test_loader, model):
 
     print('Inference done')
 
-def adjust_learning_rate(optimizer, epoch):
-    """Sets the learning rate to the initial LR decayed by 10 every 30 epochs"""
-    lr = args.lr * (0.1 ** (epoch // 20))
+def adjust_learning_rate(optimizer, epoch, args, batch=None, n_batch=None, method='cosine'):
+    if method == 'cosine':
+        T_total = args.epochs * n_batch 
+        T_cur = (epoch % args.epochs) * n_batch + batch
+        lr = 0.5 * args.lr * (1 + math.cos(math.pi * T_cur / T_total))
+    elif method == 'multistep':
+        lr = args.lr * (0.1 ** (epoch // 20))
+
     writer.add_scalar('lr', lr, global_train_step)
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
