@@ -1,10 +1,9 @@
 #!/usr/bin/env python
 # encoding: utf-8
 
-import argparse
 import os
 import time
-import math 
+import math
 
 import torch
 import numpy as np
@@ -22,6 +21,7 @@ from util import accuracy_all
 from util import write_results
 from util import weighted_softmax_loss
 from util import MAP
+from options import args
 from fashionai_dataset import FashionAIDataset
 from fashionai_dataset import FashionAITestDataset
 from fashionai_dataset import classes
@@ -33,79 +33,7 @@ import pretrainedmodels
 
 warnings.filterwarnings("ignore")
 
-model_names = pretrainedmodels.model_names
-
-parser = argparse.ArgumentParser(description='PyTorch Fashion AI')
-parser.add_argument('--data', type=str, help='path to dataset', metavar='DIR',
-                    default='/runspace/liubin/tianchi2018_fashion-tag/data/fashionAI_attributes_train_20180222')
-parser.add_argument('--test-data', type=str, help='path to dataset', metavar='DIR',
-                    default='/runspace/liubin/tianchi2018_fashion-tag/data/fashionAI_attributes_test_a_20180222')
-parser.add_argument('--cur_class_idx', default=-1, type=int, help='The index of label to classify, -1 for all')
-parser.add_argument('--arch', '-a', metavar='ARCH', default='resnet152',
-                    choices=model_names,
-                    help='model architecture: ' +
-                        ' | '.join(model_names))
-parser.add_argument('--tr_input_size', default=224, type=int,
-                    metavar='N', help='input size for training (default: 224)')
-parser.add_argument('--te_input_size', default=224, type=int,
-                    metavar='N', help='input size for testing (default: 224)')
-parser.add_argument('--te_resize_size', default=256, type=int,
-                    metavar='N', help='resize size for testing (default: 256)')
-
-ten_crop_parser = parser.add_mutually_exclusive_group(required=False)
-ten_crop_parser.add_argument('--ten_crop', dest='ten_crop', action='store_true')
-ten_crop_parser.add_argument('--no_ten_crop', dest='ten_crop', action='store_false')
-parser.set_defaults(ten_crop=True)
-
-parser.add_argument('-j', '--workers', default=12, type=int, metavar='N',
-                    help='number of data loading workers (default: 4)')
-parser.add_argument('--epochs', default=30, type=int, metavar='N',
-                    help='number of total epochs to run')
-parser.add_argument('--start-epoch', default=0, type=int, metavar='N',
-                    help='manual epoch number (useful on restarts)')
-parser.add_argument('-b', '--batch-size', default=256, type=int,
-                    metavar='N', help='mini-batch size (default: 256)')
-parser.add_argument('-vb', '--val-batch-size', default=256, type=int,
-                    metavar='N', help='mini-batch size (default: 8)')
-parser.add_argument('--lr', '--learning-rate', default=0.001, type=float,
-                    metavar='LR', help='initial learning rate')
-parser.add_argument('--momentum', default=0.9, type=float, metavar='M',
-                    help='momentum')
-parser.add_argument('--opt', default='SGD', type=str, metavar='OPT',
-                    help='optimizer')
-parser.add_argument('--weight-decay', '--wd', default=1e-4, type=float,
-                    metavar='W', help='weight decay (default: 1e-4)')
-parser.add_argument('--decay_type', '--dt', default='cosine', type=str,
-                    metavar='Decay Type', help='Decay type, cosine or multistep')
-parser.add_argument('--print-freq', '-p', default=10, type=int,
-                    metavar='N', help='print frequency (default: 10)')
-parser.add_argument('--resume', default='', type=str, metavar='PATH',
-                    help='path to latest checkpoint (default: none)')
-parser.add_argument('-e', '--evaluate', dest='evaluate', action='store_true',
-                    help='evaluate model on validation set')
-parser.add_argument('--pretrained', dest='pretrained', action='store_true',
-                    help='use pre-trained model')
-parser.add_argument('--gpus', default='5', type=str, metavar='GPU', help='id of gpu')
-parser.add_argument('--inference', dest='inference', action='store_true',  help='inference test data')
-parser.add_argument('--result_path', default='./results', type=str, metavar='PATH', help='folder to save result')
-parser.add_argument('--model_save_path', default='./models', type=str, metavar='PATH', help='folder to save models')
-parser.add_argument('--tensorboard_log_path', default='./tensorboard_log', type=str, metavar='PATH', help='folder to place tensorboard logs')
-
-args = parser.parse_args()
-args.opt = args.opt.lower()
-
 best_mAP = 0
-class_name = None
-os.environ["CUDA_VISIBLE_DEVICES"] = args.gpus
-
-classes_len = {'collar_design_labels':0,
-                  'neckline_design_labels':5,
-                  'skirt_length_labels':15,
-                  'sleeve_length_labels':21,
-                  'neck_design_labels':30,
-                  'coat_length_labels':35,
-                  'lapel_design_labels':43,
-                  'pant_length_labels':48}
 
 # for tensorboard
 name = '{args.arch}_{args.cur_class_idx}_{args.opt}_{args.decay_type}_lr_{args.lr}'.format(args=args)
@@ -114,8 +42,6 @@ writer = SummaryWriter(os.path.join(args.tensorboard_log_path, name))
 global_train_step = 0
 
 def load_data(opts):
-    global class_name
-
     if args.cur_class_idx == -1:
         class_name = 'all'
         traindir = os.path.join(args.data, 'train', 'all_labels.csv')
@@ -188,16 +114,27 @@ def build_model():
         model.last_linear = torch.nn.Linear(model.last_linear.in_features, n_class)
 
     # define optimizer
+    args.param_groups = [
+        {'params': [param for name, param in model.features.named_parameters() if name[-4:] == 'bias'],
+         'lr': 2},
+        {'params': [param for name, param in model.features.named_parameters() if name[-4:] != 'bias'],
+         'lr': 1, 'weight_decay': args.weight_decay},
+        {'params': [param for name, param in model.classifier.named_parameters() if name[-4:] == 'bias'],
+         'lr': 2},
+        {'params': [param for name, param in model.classifier.named_parameters() if name[-4:] != 'bias'],
+         'lr': 1, 'weight_decay': args.weight_decay},
+    ]
     if args.opt== "adam":
-        optimizer = torch.optim.Adam(model.parameters(), args.lr)
+        optimizer = torch.optim.Adam([i.copy() for i in args.param_groups])
+    elif args.opt == 'amsgrad':
+        optimizer = torch.optim.Adam([i.copy() for i in args.param_groups], amsgrad=True)
     elif args.opt == 'sgd':
-        optimizer = torch.optim.SGD(model.parameters(), args.lr,
-                                    momentum=args.momentum,
-                                    weight_decay=args.weight_decay)
-    elif args.opt == 'adadelta':
-        optimizer = torch.optim.Adadelta(model.parameters(), args.lr)
+        optimizer = torch.optim.SGD([i.copy() for i in args.param_groups], momentum=args.momentum)
     else:
         print('Not supported yet')
+
+    # data parallel for multi-gpu
+    model = torch.nn.DataParallel(model).cuda()
 
     # optionally resume from a checkpoint
     if args.resume:
@@ -214,7 +151,6 @@ def build_model():
         else:
             print("=> no checkpoint found at '{}'".format(args.resume))
 
-    model = torch.nn.DataParallel(model).cuda()
     cudnn.benchmark = True
 
     return model, optimizer
@@ -257,6 +193,7 @@ def main():
         best_path = os.path.join(args.model_save_path, 'best_models')
         if not os.path.exists(best_path):
             os.makedirs(best_path)
+        class_name = train_loader.dataset.class_name
         filename = "{}/{}_{}_{}_checkpoint.pth.tar".format(args.model_save_path, args.arch, class_name, mAP)
         best_filename = '{}/{}_{}.pth.tar'.format(best_path, args.arch, class_name)
         save_checkpoint(state, is_best, filename, best_filename)
@@ -286,7 +223,7 @@ def train(train_loader, model, criterion, optimizer, epoch):
         data_time.update(time.time() - end)
 
         if args.opt == 'sgd':
-            adjust_learning_rate(optimizer, epoch, args, batch=i, n_batch=len(train_loader), method=args.decay_type)
+            adjust_learning_rate(optimizer, epoch, n_batch=len(train_loader), method=args.decay_type)
 
         # convert to variable
         target = target.cuda(async=True)
@@ -371,7 +308,7 @@ def validate(val_loader, model, criterion):
         end = time.time()
 
         if i % args.print_freq == 0:
-            print('Test: [{0}/{1}]\t'
+            print('Val: [{0}/{1}]\t'
                 'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
                 'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
                 'Prec {prec.val:.3f} ({prec.avg:.3f})'.format(
@@ -409,25 +346,34 @@ def inference(test_loader, model):
             append_value = torch.nn.functional.softmax(real_output[j][real_output[j]!= 0].float())
             results.append(append_value.data.cpu().numpy())
 
+        if i % args.print_freq == 0:
+            print('Inference: [{0}/{1}]\t'
+                'Time {batch_time.val:.3f} ({batch_time.avg:.3f})'.format(
+                i, len(val_loader), batch_time=batch_time))
+
+
     # write results to file
-    save_path = os.path.join(args.result_path, class_name+".csv")
+    save_path = os.path.join(args.result_path, test_loader.dataset.class_name+".csv")
     if not os.path.exists(args.result_path):
         os.makedirs(args.result_path)
     write_results(test_loader.dataset.df_load, results, save_path)
 
     print('Inference done')
 
-def adjust_learning_rate(optimizer, epoch, args, batch=None, n_batch=None, method='cosine'):
+def adjust_learning_rate(optimizer, epoch, n_batch=None, method='cosine'):
     if method == 'cosine':
-        T_total = args.epochs * n_batch 
-        T_cur = (epoch % args.epochs) * n_batch + batch
-        lr = 0.5 * args.lr * (1 + math.cos(math.pi * T_cur / T_total))
+        cosine = lambda x: 0.5 * (1 + math.cos(math.pi * x))
+        lr = args.lr * cosine(global_train_step / (args.epochs * n_batch))
     elif method == 'multistep':
-        lr = args.lr * (0.1 ** (epoch // 20))
+        lr, decay_rate = args.lr, args.decay_rate
+        if epoch >= args.epochs * 0.75:
+            lr *= decay_rate**2
+        elif epoch >= args.epochs * 0.5:
+            lr *= decay_rate
 
     writer.add_scalar('lr', lr, global_train_step)
-    for param_group in optimizer.param_groups:
-        param_group['lr'] = lr
+    for i, param_group in enumerate(optimizer.param_groups):
+        param_group['lr'] = lr * args.param_groups[i]['lr']
 
 
 if __name__ == '__main__':

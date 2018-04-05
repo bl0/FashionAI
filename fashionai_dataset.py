@@ -38,6 +38,7 @@ class FashionAIDataset(Dataset):
         df = pd.read_csv(csv_file, header=None)
         df.columns = ['image_id', 'class', 'label']
 
+        self.class_name = class_name
         if class_name != "all":
             self.df_load = (df[df['class'] == class_name].copy())
             self.df_load.reset_index(inplace=True)
