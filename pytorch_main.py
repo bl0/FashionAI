@@ -58,6 +58,8 @@ def load_data(opts):
         traindir, args.data,
         class_name=class_name,
         transform=transforms.Compose([
+            transforms.RandomRotation(10),
+            transforms.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1, hue=0.1),
             transforms.RandomResizedCrop(max(opts.input_size)), # TODO: if input size not fixed
             transforms.RandomHorizontalFlip(),
             transforms.ToTensor(),
@@ -126,7 +128,7 @@ def build_model():
     ]
     if args.opt== "adam":
         optimizer = torch.optim.Adam([i.copy() for i in args.param_groups])
-    elif args.opt == 'amsgrad':
+    elif args.opt == 'amsgrad':  # need pytorch master version
         optimizer = torch.optim.Adam([i.copy() for i in args.param_groups], amsgrad=True)
     elif args.opt == 'sgd':
         optimizer = torch.optim.SGD([i.copy() for i in args.param_groups], momentum=args.momentum)
