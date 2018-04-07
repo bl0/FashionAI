@@ -378,9 +378,7 @@ def inference(test_loader, model):
             results.append(append_value.data.cpu().numpy())
 
         if i % args.print_freq == 0:
-            print('Inference: [{0}/{1}]\t'
-                'Time {batch_time.val:.3f} ({batch_time.avg:.3f})'.format(
-                i, len(val_loader), batch_time=batch_time))
+            print('Inference: [{0}/{1}]'.format(i, len(test_loader)))
 
 
     # write results to file
