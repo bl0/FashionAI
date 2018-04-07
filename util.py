@@ -99,4 +99,5 @@ def MAP(output, target, idx):
         weight = np.arange(len(sorted_idx)) + 1
 
         APs.append(np.sum((sorted_attr_value == target_c[sorted_idx]) * weight) / np.sum(weight))
+    print('* APs: ' + str(APs))
     return np.mean(APs) * 100

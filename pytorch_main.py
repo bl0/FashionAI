@@ -35,7 +35,7 @@ warnings.filterwarnings("ignore")
 
 best_mAP = 0
 best_prec = 0
-dropout_ratio = 0.25
+dropout_ratio = 0.2
 
 # for tensorboard
 name = '{args.arch}_{args.cur_class_idx}_{args.opt}_{args.decay_type}_lr_{args.lr}_wd_{args.weight_decay}_dropout_{dropout_ratio}'.format(args=args, dropout_ratio=dropout_ratio)
@@ -126,14 +126,14 @@ def build_model():
         feat_param = list(model.features.named_parameters())
         cls_param = list(model.classifier.named_parameters())
     elif args.arch.startswith('resnet'):
-        # model.avgpool = nn.AdaptiveAvgPool2d(1)
+        model.avgpool = nn.AdaptiveAvgPool2d(1)
 
         # no dropout
-        model.last_linear = torch.nn.Linear(model.last_linear.in_features, n_class)
+        # model.last_linear = torch.nn.Linear(model.last_linear.in_features, n_class)
 
         # dropout
-        # last_linear = torch.nn.Linear(model.last_linear.in_features, n_class)
-        # model.last_linear = nn.Sequential(last_linear, nn.Dropout(dropout_ratio, inplace=True))
+        last_linear = torch.nn.Linear(model.last_linear.in_features, n_class)
+        model.last_linear = nn.Sequential(last_linear, nn.Dropout(dropout_ratio, inplace=True))
 
         cls_param = list(model.last_linear.named_parameters())
         feat_param = [param for param in model.named_parameters() if not param[0].startswith('last_linear')]
@@ -157,7 +157,7 @@ def build_model():
     elif args.opt == 'amsgrad':  # need pytorch master version
         optimizer = torch.optim.Adam([i.copy() for i in args.param_groups], amsgrad=True)
     elif args.opt == 'sgd':
-        optimizer = torch.optim.SGD([i.copy() for i in args.param_groups], momentum=args.momentum)
+        optimizer = torch.optim.SGD([i.copy() for i in args.param_groups], momentum=args.momentum, nesterov=True) # TODO
     else:
         print('Not supported yet')
 

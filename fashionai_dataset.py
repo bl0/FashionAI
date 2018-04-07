@@ -84,6 +84,7 @@ class FashionAITestDataset(Dataset):
         df.columns = ['image_id', 'class', 'label']
         del df['label']
 
+        self.class_name = class_name
         if class_name != "all":
             self.df_load = (df[df['class'] == class_name].copy())
             self.df_load.reset_index(inplace=True)
