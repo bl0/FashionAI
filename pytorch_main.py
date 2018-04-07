@@ -30,6 +30,7 @@ from pprint import pprint
 import warnings
 from tensorboardX import SummaryWriter
 import pretrainedmodels
+from pretrainedmodels.models.dpn import AdaptiveAvgMaxPool2d
 
 warnings.filterwarnings("ignore")
 
@@ -123,17 +124,18 @@ def build_model():
         model.classifier = nn.Conv2d(model.classifier.in_channels, n_class, kernel_size=1, bias=True)
         # last_conv = nn.Conv2d(model.classifier.in_channels, n_class, kernel_size=1, bias=True)
         # model.classifier = nn.Sequential(last_conv, nn.Dropout(dropout_ratio, inplace=True))
-        feat_param = model.features.named_parameters()
-        cls_param = model.classifier.named_parameters()
+        feat_param = list(model.features.named_parameters())
+        cls_param = list(model.classifier.named_parameters())
     elif args.arch.startswith('resnet'):
-        # model.avgpool = nn.AdaptiveAvgPool2d(1)
+        # model.avgpool = AdaptiveAvgMaxPool2d(output_size=1, pool_type='avgmax')
+        model.avgpool = nn.AdaptiveAvgPool2d(1)
 
         # no dropout
-        model.last_linear = torch.nn.Linear(model.last_linear.in_features, n_class)
+        # model.last_linear = torch.nn.Linear(model.last_linear.in_features, n_class)
 
         # dropout
-        # last_linear = torch.nn.Linear(model.last_linear.in_features, n_class)
-        # model.last_linear = nn.Sequential(last_linear, nn.Dropout(dropout_ratio, inplace=True))
+        last_linear = torch.nn.Linear(model.last_linear.in_features, n_class)
+        model.last_linear = nn.Sequential(last_linear, nn.Dropout(dropout_ratio, inplace=True))
 
         cls_param = list(model.last_linear.named_parameters())
         feat_param = [param for param in model.named_parameters() if not param[0].startswith('last_linear')]
@@ -174,9 +176,18 @@ def build_model():
             best_mAP = checkpoint['best_mAP']
             best_prec = checkpoint.get('best_prec', 0)
             model.load_state_dict(checkpoint['state_dict'])
-            # optimizer.load_state_dict(checkpoint['optimizer'])
+            optimizer.load_state_dict(checkpoint['optimizer'])
             print("=> loaded checkpoint '{}' (epoch {})"
                   .format(args.resume, checkpoint['epoch']))
+
+            # TMP
+            model = model.module
+            model.avgpool = nn.AvgPool2d(kernel_size=7, stride=1)
+            conv = nn.Conv2d(model.last_linear[0].in_features, n_class, kernel_size=1, bias=True).cuda()
+            conv.weight.data.copy_(model.last_linear[0].weight.data)
+            conv.bias.data.copy_(model.last_linear[0].bias.data)
+            model.last_linear = nn.Sequential(conv, AdaptiveAvgMaxPool2d(output_size=1, pool_type='avgmax'))
+            # model = torch.nn.DataParallel(model).cuda()
         else:
             print("=> no checkpoint found at '{}'".format(args.resume))
 
@@ -189,7 +200,12 @@ def main():
 
     global best_mAP, best_prec
     model, optimizer = build_model()
-    train_loader, val_loader, test_loader = load_data(model.module)
+    # TMP
+    train_loader, val_loader, test_loader = load_data(model)
+
+    # train_loader, val_loader, test_loader = load_data(model.module)
+
+
     criterion = nn.CrossEntropyLoss().cuda()
 
     if args.inference:
@@ -321,7 +337,12 @@ def validate(val_loader, model, criterion):
         input_var = torch.autograd.Variable(input, volatile=True)
 
         # compute output
-        output = model(input_var)
+        # output = model(input_var)
+
+        # TMP
+        output = model.features(input_var.cuda())
+        output = model.last_linear(output).view(1, -1)
+
         if args.crop == 'ten':
             output = output.view(bs, ncrop, -1).mean(1)
         output_all.append(output.cpu().data.numpy())
