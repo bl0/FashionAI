@@ -14,17 +14,14 @@ parser.add_argument('--arch', '-a', metavar='ARCH', default='resnet152',
                     choices=model_names,
                     help='model architecture: ' +
                         ' | '.join(model_names))
-parser.add_argument('--tr_input_size', default=224, type=int,
+parser.add_argument('--train_input_size', default=224, type=int,
                     metavar='N', help='input size for training (default: 224)')
-parser.add_argument('--te_input_size', default=224, type=int,
+parser.add_argument('--test_input_size', default=224, type=int,
                     metavar='N', help='input size for testing (default: 224)')
-parser.add_argument('--te_resize_size', default=256, type=int,
+parser.add_argument('--test_resize_size', default=256, type=int,
                     metavar='N', help='resize size for testing (default: 256)')
-
-ten_crop_parser = parser.add_mutually_exclusive_group(required=False)
-ten_crop_parser.add_argument('--ten_crop', dest='ten_crop', action='store_true')
-ten_crop_parser.add_argument('--no_ten_crop', dest='ten_crop', action='store_false')
-parser.set_defaults(ten_crop=True)
+parser.add_argument('--crop', type=str, default='ten', choices=['ten', 'no', 'center'],
+                    help='if no crop, val_batch_size must be 1')
 
 pretrained_parser = parser.add_mutually_exclusive_group(required=False)
 pretrained_parser.add_argument('--pretrained', dest='pretrained', action='store_true')

@@ -35,9 +35,10 @@ warnings.filterwarnings("ignore")
 
 best_mAP = 0
 best_prec = 0
+dropout_ratio = 0.25
 
 # for tensorboard
-name = '{args.arch}_{args.cur_class_idx}_{args.opt}_{args.decay_type}_lr_{args.lr}'.format(args=args)
+name = '{args.arch}_{args.cur_class_idx}_{args.opt}_{args.decay_type}_lr_{args.lr}_wd_{args.weight_decay}_dropout_{dropout_ratio}'.format(args=args, dropout_ratio=dropout_ratio)
 writer = SummaryWriter(os.path.join(args.tensorboard_log_path, name))
 
 global_train_step = 0
@@ -65,16 +66,26 @@ def load_data(opts):
             normalize,
         ]))
 
-    if args.ten_crop:
-        crop = transforms.TenCrop(max(opts.input_size))
+    if args.crop == 'ten':
+        resize = transforms.Resize(int(args.test_input_size / 0.875))
+        crop = transforms.TenCrop(args.test_input_size)
         to_tensor = transforms.Lambda(lambda crops: torch.stack([transforms.ToTensor()(crop) for crop in crops]))
         norm = transforms.Lambda(lambda crops: torch.stack([normalize(crop) for crop in crops]))
-    else:
-        crop = transforms.CenterCrop(max(opts.input_size))
+
+        val_transform = transforms.Compose([resize, crop, to_tensor, norm])
+    elif args.crop == 'center':
+        resize = transforms.Resize(args.test_input_size)
+        crop = transforms.CenterCrop(args.test_input_size)
         to_tensor = transforms.ToTensor()
         norm = normalize
-    resize = transforms.Resize(args.te_resize_size)
-    val_transform = transforms.Compose([resize, crop, to_tensor, norm])
+
+        val_transform = transforms.Compose([resize, crop, to_tensor, norm])
+    elif args.crop == 'no':
+        resize = transforms.Resize(args.test_input_size)
+        to_tensor = transforms.ToTensor()
+        norm = normalize
+
+        val_transform = transforms.Compose([resize, to_tensor, norm])
 
     val_dataset = FashionAIDataset(valdir, args.data, class_name=class_name, transform=val_transform)
     test_dataset = FashionAITestDataset(testdir, args.test_data, class_name=class_name, transform=val_transform)
@@ -108,13 +119,22 @@ def build_model():
         print("=> creating model '{}'".format(args.arch))
         model = pretrainedmodels.__dict__[args.arch](num_classes=1000, pretrained=None)
 
-    # model.avgpool = nn.AdaptiveAvgPool2d(1)
     if args.arch.startswith('dpn'):
         model.classifier = nn.Conv2d(model.classifier.in_channels, n_class, kernel_size=1, bias=True)
+        # last_conv = nn.Conv2d(model.classifier.in_channels, n_class, kernel_size=1, bias=True)
+        # model.classifier = nn.Sequential(last_conv, nn.Dropout(dropout_ratio, inplace=True))
         feat_param = model.features.named_parameters()
         cls_param = model.classifier.named_parameters()
     elif args.arch.startswith('resnet'):
+        # model.avgpool = nn.AdaptiveAvgPool2d(1)
+
+        # no dropout
         model.last_linear = torch.nn.Linear(model.last_linear.in_features, n_class)
+
+        # dropout
+        # last_linear = torch.nn.Linear(model.last_linear.in_features, n_class)
+        # model.last_linear = nn.Sequential(last_linear, nn.Dropout(dropout_ratio, inplace=True))
+
         cls_param = list(model.last_linear.named_parameters())
         feat_param = [param for param in model.named_parameters() if not param[0].startswith('last_linear')]
     else:
@@ -154,7 +174,7 @@ def build_model():
             best_mAP = checkpoint['best_mAP']
             best_prec = checkpoint.get('best_prec', 0)
             model.load_state_dict(checkpoint['state_dict'])
-            optimizer.load_state_dict(checkpoint['optimizer'])
+            # optimizer.load_state_dict(checkpoint['optimizer'])
             print("=> loaded checkpoint '{}' (epoch {})"
                   .format(args.resume, checkpoint['epoch']))
         else:
@@ -295,14 +315,14 @@ def validate(val_loader, model, criterion):
 
         target = target.cuda(async=True)
 
-        if args.ten_crop:
+        if args.crop == 'ten':
             bs, ncrop, c, h, w = input.size()
             input = input.view(-1, c, h, w)
         input_var = torch.autograd.Variable(input, volatile=True)
 
         # compute output
         output = model(input_var)
-        if args.ten_crop:
+        if args.crop == 'ten':
             output = output.view(bs, ncrop, -1).mean(1)
         output_all.append(output.cpu().data.numpy())
         target_var = torch.autograd.Variable(target, volatile=True)
@@ -341,14 +361,14 @@ def inference(test_loader, model):
 
     results = []
     for i, (input, idx) in enumerate(test_loader):
-        if args.ten_crop:
+        if args.crop == 'ten':
             bs, ncrop, c, h, w = input.size()
             input = input.view(-1, c, h, w)
 
         input_var = torch.autograd.Variable(input, volatile=True)
         output = model(input_var)
 
-        if args.ten_crop:
+        if args.crop == 'ten':
             output = output.view(bs, ncrop, -1).mean(1)
 
         real_output = torch.mul(output, torch.autograd.Variable(idx).float().cuda())
@@ -381,6 +401,7 @@ def adjust_learning_rate(optimizer, epoch, n_batch=None, method='cosine'):
             lr *= decay_rate**2
         elif epoch >= args.epochs * 0.5:
             lr *= decay_rate
+        # lr = args.lr * args.decay_rate ** (epoch // 9)
 
     writer.add_scalar('lr', lr, global_train_step)
     for i, param_group in enumerate(optimizer.param_groups):
