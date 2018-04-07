@@ -34,6 +34,7 @@ import pretrainedmodels
 warnings.filterwarnings("ignore")
 
 best_mAP = 0
+best_prec = 0
 
 # for tensorboard
 name = '{args.arch}_{args.cur_class_idx}_{args.opt}_{args.decay_type}_lr_{args.lr}'.format(args=args)
@@ -58,8 +59,6 @@ def load_data(opts):
         traindir, args.data,
         class_name=class_name,
         transform=transforms.Compose([
-            transforms.RandomRotation(10),
-            transforms.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1, hue=0.1),
             transforms.RandomResizedCrop(max(opts.input_size)), # TODO: if input size not fixed
             transforms.RandomHorizontalFlip(),
             transforms.ToTensor(),
@@ -148,11 +147,12 @@ def build_model():
     # optionally resume from a checkpoint
     if args.resume:
         if os.path.isfile(args.resume):
-            global best_mAP
+            global best_mAP, best_prec
             print("=> loading checkpoint '{}'".format(args.resume))
             checkpoint = torch.load(args.resume)
             args.start_epoch = checkpoint['epoch']
             best_mAP = checkpoint['best_mAP']
+            best_prec = checkpoint.get('best_prec', 0)
             model.load_state_dict(checkpoint['state_dict'])
             optimizer.load_state_dict(checkpoint['optimizer'])
             print("=> loaded checkpoint '{}' (epoch {})"
@@ -167,7 +167,7 @@ def build_model():
 def main():
     pprint(vars(args))
 
-    global best_mAP
+    global best_mAP, best_prec
     model, optimizer = build_model()
     train_loader, val_loader, test_loader = load_data(model.module)
     criterion = nn.CrossEntropyLoss().cuda()
@@ -190,6 +190,7 @@ def main():
         # remember best mAP and save checkpoint
         is_best = mAP > best_mAP
         best_mAP = max(mAP, best_mAP)
+        best_prec = max(prec, best_prec)
 
         # save checkpoint
         state = {
@@ -197,6 +198,7 @@ def main():
             'arch': args.arch,
             'state_dict': model.state_dict(),
             'best_mAP': best_mAP,
+            'best_prec': best_prec,
             'optimizer' : optimizer.state_dict(),
         }
         best_path = os.path.join(args.model_save_path, 'best_models')
@@ -215,7 +217,7 @@ def main():
         writer.file_writer.flush()
 
         # print mAP
-        print(' * best mAP = {best_mAP:.3f}'.format(best_mAP=best_mAP))
+        print(' * best mAP = {best_mAP:.3f}, best prec = {best_prec:.3f}'.format(best_mAP=best_mAP, best_prec=best_prec))
 
 def train(train_loader, model, criterion, optimizer, epoch):
     batch_time = AverageMeter()
