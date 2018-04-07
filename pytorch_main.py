@@ -123,8 +123,8 @@ def build_model():
         model.classifier = nn.Conv2d(model.classifier.in_channels, n_class, kernel_size=1, bias=True)
         # last_conv = nn.Conv2d(model.classifier.in_channels, n_class, kernel_size=1, bias=True)
         # model.classifier = nn.Sequential(last_conv, nn.Dropout(dropout_ratio, inplace=True))
-        feat_param = model.features.named_parameters()
-        cls_param = model.classifier.named_parameters()
+        feat_param = list(model.features.named_parameters())
+        cls_param = list(model.classifier.named_parameters())
     elif args.arch.startswith('resnet'):
         # model.avgpool = nn.AdaptiveAvgPool2d(1)
 
