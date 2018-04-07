@@ -112,18 +112,25 @@ def build_model():
     # model.avgpool = nn.AdaptiveAvgPool2d(1)
     if args.arch.startswith('dpn'):
         model.classifier = nn.Conv2d(model.classifier.in_channels, n_class, kernel_size=1, bias=True)
-    else:
+        feat_param = model.features.named_parameters()
+        cls_param = model.classifier.named_parameters()
+    elif args.arch.startswith('resnet'):
         model.last_linear = torch.nn.Linear(model.last_linear.in_features, n_class)
+        cls_param = list(model.last_linear.named_parameters())
+        feat_param = [param for param in model.named_parameters() if not param[0].startswith('last_linear')]
+    else:
+        print('not supported yet')
+        return
 
     # define optimizer
     args.param_groups = [
-        {'params': [param for name, param in model.features.named_parameters() if name[-4:] == 'bias'],
+        {'params': [param for name, param in feat_param if name[-4:] == 'bias'],
          'lr': 2},
-        {'params': [param for name, param in model.features.named_parameters() if name[-4:] != 'bias'],
+        {'params': [param for name, param in feat_param if name[-4:] != 'bias'],
          'lr': 1, 'weight_decay': args.weight_decay},
-        {'params': [param for name, param in model.classifier.named_parameters() if name[-4:] == 'bias'],
+        {'params': [param for name, param in cls_param if name[-4:] == 'bias'],
          'lr': 2},
-        {'params': [param for name, param in model.classifier.named_parameters() if name[-4:] != 'bias'],
+        {'params': [param for name, param in cls_param if name[-4:] != 'bias'],
          'lr': 1, 'weight_decay': args.weight_decay},
     ]
     if args.opt== "adam":
