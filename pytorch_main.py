@@ -35,10 +35,9 @@ warnings.filterwarnings("ignore")
 
 best_mAP = 0
 best_prec = 0
-dropout_ratio = 0.2
 
 # for tensorboard
-name = '{args.arch}_{args.cur_class_idx}_{args.opt}_{args.decay_type}_lr_{args.lr}_wd_{args.weight_decay}_dropout_{dropout_ratio}'.format(args=args, dropout_ratio=dropout_ratio)
+name = '{args.arch}_{args.cur_class_idx}_{args.opt}_{args.decay_type}_lr_{args.lr}_wd_{args.weight_decay}_dropout_{args.dropout}'.format(args=args)
 writer = SummaryWriter(os.path.join(args.tensorboard_log_path, name))
 
 global_train_step = 0
@@ -60,28 +59,29 @@ def load_data(opts):
         traindir, args.data,
         class_name=class_name,
         transform=transforms.Compose([
-            transforms.RandomResizedCrop(max(opts.input_size)), # TODO: if input size not fixed
+            # transforms.RandomResizedCrop(max(opts.input_size)), # TODO: if input size not fixed
+            transforms.RandomResizedCrop(args.tr_input_size),
             transforms.RandomHorizontalFlip(),
             transforms.ToTensor(),
             normalize,
         ]))
 
     if args.crop == 'ten':
-        resize = transforms.Resize(int(args.test_input_size / 0.875))
-        crop = transforms.TenCrop(args.test_input_size)
+        resize = transforms.Resize(int(args.te_input_size / 0.875))
+        crop = transforms.TenCrop(args.te_input_size)
         to_tensor = transforms.Lambda(lambda crops: torch.stack([transforms.ToTensor()(crop) for crop in crops]))
         norm = transforms.Lambda(lambda crops: torch.stack([normalize(crop) for crop in crops]))
 
         val_transform = transforms.Compose([resize, crop, to_tensor, norm])
     elif args.crop == 'center':
-        resize = transforms.Resize(args.test_input_size)
-        crop = transforms.CenterCrop(args.test_input_size)
+        resize = transforms.Resize(args.te_input_size)
+        crop = transforms.CenterCrop(args.te_input_size)
         to_tensor = transforms.ToTensor()
         norm = normalize
 
         val_transform = transforms.Compose([resize, crop, to_tensor, norm])
     elif args.crop == 'no':
-        resize = transforms.Resize(args.test_input_size)
+        resize = transforms.Resize(args.te_input_size)
         to_tensor = transforms.ToTensor()
         norm = normalize
 
@@ -128,12 +128,14 @@ def build_model():
     elif args.arch.startswith('resnet'):
         model.avgpool = nn.AdaptiveAvgPool2d(1)
 
-        # no dropout
-        # model.last_linear = torch.nn.Linear(model.last_linear.in_features, n_class)
-
-        # dropout
-        last_linear = torch.nn.Linear(model.last_linear.in_features, n_class)
-        model.last_linear = nn.Sequential(last_linear, nn.Dropout(dropout_ratio, inplace=True))
+        if args.dropout > 0:
+            last_linear = torch.nn.Linear(model.last_linear.in_features, n_class)
+            model.last_linear = nn.Sequential(last_linear, nn.Dropout(args.dropout, inplace=True))
+        elif args.dropout == 0:
+            model.last_linear = torch.nn.Linear(model.last_linear.in_features, n_class)
+        else:
+            print('not supported yet')
+            return
 
         cls_param = list(model.last_linear.named_parameters())
         feat_param = [param for param in model.named_parameters() if not param[0].startswith('last_linear')]
@@ -201,6 +203,8 @@ def main():
         return
 
     for epoch in range(args.start_epoch, args.epochs):
+        print(args.explain)
+        
         # train for one epoch
         train(train_loader, model, criterion, optimizer, epoch)
 

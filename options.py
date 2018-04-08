@@ -14,11 +14,11 @@ parser.add_argument('--arch', '-a', metavar='ARCH', default='resnet152',
                     choices=model_names,
                     help='model architecture: ' +
                         ' | '.join(model_names))
-parser.add_argument('--train_input_size', default=224, type=int,
+parser.add_argument('--tr_input_size', default=224, type=int,
                     metavar='N', help='input size for training (default: 224)')
-parser.add_argument('--test_input_size', default=224, type=int,
+parser.add_argument('--te_input_size', default=224, type=int,
                     metavar='N', help='input size for testing (default: 224)')
-parser.add_argument('--test_resize_size', default=256, type=int,
+parser.add_argument('--te_resize_size', default=256, type=int,
                     metavar='N', help='resize size for testing (default: 256)')
 parser.add_argument('--crop', type=str, default='ten', choices=['ten', 'no', 'center'],
                     help='if no crop, val_batch_size must be 1')
@@ -53,8 +53,10 @@ parser.add_argument('--weight-decay', '--wd', default=1e-4, type=float,
                     metavar='W', help='weight decay (default: 1e-4)')
 parser.add_argument('--decay-rate', '--dr', default=0.1, type=float,
                     metavar='Decay Rate', help='Decay rate (default: 0.1)')
-parser.add_argument('--decay-type', '--dt', default='cosine', type=str,
+parser.add_argument('--decay-type', '--dt', default='multistep', type=str,
                     metavar='Decay Type', help='Decay type, cosine or multistep')
+parser.add_argument('--dropout', default=0.0, type=float,
+                    help='dropout rate, default 0, minus means linear gradual dropout')
 
 # data and io related
 parser.add_argument('--data', type=str, help='path to dataset', metavar='DIR',
@@ -69,6 +71,8 @@ parser.add_argument('--model-save-path', default='./models', type=str,
                     metavar='PATH', help='folder to save models')
 parser.add_argument('--tensorboard-log-path', default='./tensorboard_log', type=str,
                     metavar='PATH', help='folder to place tensorboard logs')
+
+parser.add_argument('--explain', default='', type=str)
 
 # others
 parser.add_argument('--cur_class_idx', default=-1, type=int, help='The index of label to classify, -1 for all')
