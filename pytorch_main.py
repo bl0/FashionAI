@@ -9,6 +9,7 @@ import torch
 import numpy as np
 import torch.nn as nn
 import torch.nn.parallel
+import torch.nn.functional as F
 import torch.backends.cudnn as cudnn
 import torch.optim
 import torch.utils.data
@@ -52,8 +53,8 @@ parser.add_argument('--te_resize_size', default=256, type=int,
                     metavar='N', help='resize size for testing (default: 256)')
 
 ten_crop_parser = parser.add_mutually_exclusive_group(required=False)
-ten_crop_parser.add_argument('--ten_crop', dest='ten_crop', action='store_true')
-ten_crop_parser.add_argument('--no_ten_crop', dest='ten_crop', action='store_false')
+ten_crop_parser.add_argument('--ten-crop', dest='ten_crop', action='store_true')
+ten_crop_parser.add_argument('--no-ten-crop', dest='ten_crop', action='store_false')
 parser.set_defaults(ten_crop=True)
 
 parser.add_argument('-j', '--workers', default=12, type=int, metavar='N',
@@ -133,16 +134,22 @@ def load_data(opts):
             normalize,
         ]))
 
+    args.ten_crop = False
     if args.ten_crop:
-        crop = transforms.TenCrop(max(opts.input_size))
+        #crop = transforms.TenCrop(max(opts.input_size))
+        crop = transforms.TenCrop(args.te_resize_size)
         to_tensor = transforms.Lambda(lambda crops: torch.stack([transforms.ToTensor()(crop) for crop in crops]))
         norm = transforms.Lambda(lambda crops: torch.stack([normalize(crop) for crop in crops]))
+        resize = transforms.Resize(366)
     else:
-        crop = transforms.CenterCrop(max(opts.input_size))
+        #crop = transforms.CenterCrop(max(opts.input_size))
+        crop = transforms.CenterCrop(args.te_resize_size)
         to_tensor = transforms.ToTensor()
         norm = normalize
-    resize = transforms.Resize(args.te_resize_size)
-    val_transform = transforms.Compose([resize, crop, to_tensor, norm])
+        resize = transforms.Resize(args.te_resize_size)
+
+    #val_transform = transforms.Compose([resize, crop, to_tensor, norm])
+    val_transform = transforms.Compose([resize, to_tensor, norm])
 
     val_dataset = FashionAIDataset(valdir, args.data, class_name=class_name, transform=val_transform)
     test_dataset = FashionAITestDataset(testdir, args.test_data, class_name=class_name, transform=val_transform)
@@ -178,14 +185,33 @@ def build_model():
 
     # model.avgpool = nn.AdaptiveAvgPool2d(1)
     if args.arch.startswith('dpn'):
-        model.classifier = nn.Conv2d(model.classifier.in_channels, n_class, kernel_size=1, bias=True)
+        last_conv = nn.Conv2d(model.classifier.in_channels, n_class, kernel_size=1, bias=True)
+        model.classifier = last_conv
+        # model.classifier = nn.Sequential(last_conv, nn.Dropout(0.2, inplace=True))
     else:
         model.last_linear = torch.nn.Linear(model.last_linear.in_features, n_class)
 
+    args.SGD_param = [
+        {'params': [param for name, param in model.features.named_parameters() if name[-4:] == 'bias'],
+         'lr': 2},
+        {'params': [param for name, param in model.features.named_parameters() if name[-4:] != 'bias'],
+         'lr': 1, 'weight_decay': args.weight_decay},
+        {'params': [param for name, param in model.classifier.named_parameters() if name[-4:] == 'bias'],
+         'lr': 2},
+        {'params': [param for name, param in model.classifier.named_parameters() if name[-4:] != 'bias'],
+         'lr': 1, 'weight_decay': args.weight_decay},
+    ]
+
     # define optimizer
-    optimizer = torch.optim.SGD(model.parameters(), args.lr,
-                                momentum=args.momentum,
-                                weight_decay=args.weight_decay)
+#    optimizer = torch.optim.SGD([i.copy() for i in args.SGD_param], args.lr,
+#                                momentum=args.momentum,
+#                                weight_decay=args.weight_decay)
+    optimizer = torch.optim.SGD([i.copy() for i in args.SGD_param], momentum=args.momentum)
+
+    import pdb
+    pdb.set_trace()
+    
+    model = torch.nn.DataParallel(model).cuda()
 
     # optionally resume from a checkpoint
     if args.resume:
@@ -202,7 +228,6 @@ def build_model():
         else:
             print("=> no checkpoint found at '{}'".format(args.resume))
 
-    model = torch.nn.DataParallel(model).cuda()
     cudnn.benchmark = True
 
     return model, optimizer
@@ -406,10 +431,19 @@ def inference(test_loader, model):
 
 def adjust_learning_rate(optimizer, epoch):
     """Sets the learning rate to the initial LR decayed by 10 every 30 epochs"""
-    lr = args.lr * (0.1 ** (epoch // 20))
+    # lr = args.lr * (0.1 ** (epoch // 10))
+
+
+    lr, decay_rate = args.lr, 0.1
+    if epoch >= args.epochs * 0.75:
+        lr *= decay_rate**2
+    elif epoch >= args.epochs * 0.5:
+        lr *= decay_rate
+
+    
     writer.add_scalar('lr', lr, global_train_step)
-    for param_group in optimizer.param_groups:
-        param_group['lr'] = lr
+    for i, param_group in enumerate(optimizer.param_groups):
+        param_group['lr'] = lr * args.SGD_param[i]['lr']
 
 
 if __name__ == '__main__':
