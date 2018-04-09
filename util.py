@@ -86,7 +86,7 @@ def MAP(output, target, idx):
     first_and_last = [(row[0], row[-1]) for row in occur]
     first_np = np.array(first_and_last)[:, 0]
     APs = []
-    for (first, last) in set(first_and_last):
+    for (first, last) in sorted(list(set(first_and_last))):
         output_c = output[first_np == first, first: last+1]
         target_c = target[first_np == first]
         probs = np_softmax(output_c)
@@ -97,7 +97,7 @@ def MAP(output, target, idx):
         sorted_attr_value = probs.argmax(axis=-1)[sorted_idx]
 
         weight = np.arange(len(sorted_idx)) + 1
-
+        
         APs.append(np.sum((sorted_attr_value == target_c[sorted_idx]) * weight) / np.sum(weight))
     print('* APs: ' + str(APs))
     return np.mean(APs) * 100
