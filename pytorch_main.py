@@ -53,7 +53,10 @@ def load_data(opts):
         valdir = os.path.join(args.data, 'val', class_name + '.csv')
     testdir = os.path.join(args.test_data, 'Tests', 'question.csv')
 
-    normalize = transforms.Normalize(mean=opts.mean, std=opts.std)
+    if args.no_norm:
+        normalize = lambda x: x
+    else:
+        normalize = transforms.Normalize(mean=opts.mean, std=opts.std)
 
     train_dataset = FashionAIDataset(
         traindir, args.data,
@@ -127,6 +130,10 @@ def build_model():
         cls_param = list(model.classifier.named_parameters())
     elif args.arch.startswith('resnet'):
         model.avgpool = nn.AdaptiveAvgPool2d(1)
+
+        if args.no_norm:
+            input_norm = nn.BatchNorm2d(3)
+            model.conv1 = nn.Sequential(model.conv1)
 
         if args.dropout > 0:
             last_linear = torch.nn.Linear(model.last_linear.in_features, n_class)

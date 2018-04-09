@@ -57,6 +57,8 @@ parser.add_argument('--decay-type', '--dt', default='multistep', type=str,
                     metavar='Decay Type', help='Decay type, cosine or multistep')
 parser.add_argument('--dropout', default=0.0, type=float,
                     help='dropout rate, default 0, minus means linear gradual dropout')
+parser.add_argument('--no-norm', action='store_true',
+                    help='use batch norm before 1st conv')
 
 # data and io related
 parser.add_argument('--data', type=str, help='path to dataset', metavar='DIR',
