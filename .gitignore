@@ -110,3 +110,5 @@ results
 transfer_learning.ipynb
 *.pth.tar
 tensorboard_log/
+submits
+*.zip
