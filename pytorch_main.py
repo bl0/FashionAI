@@ -134,8 +134,14 @@ def build_model():
         elif args.dropout == 0:
             model.last_linear = torch.nn.Linear(model.last_linear.in_features, n_class)
         else:
-            print('not supported yet')
-            return
+            max_dropout = -args.dropout
+            model.layer1 = nn.Sequential(model.layer1, nn.Dropout(max_dropout/5*1, inplace=True))
+            model.layer2 = nn.Sequential(model.layer2, nn.Dropout(max_dropout/5*2, inplace=True))
+            model.layer3 = nn.Sequential(model.layer3, nn.Dropout(max_dropout/5*3, inplace=True))
+            model.layer4 = nn.Sequential(model.layer4, nn.Dropout(max_dropout/5*4, inplace=True))
+
+            last_linear = torch.nn.Linear(model.last_linear.in_features, n_class)
+            model.last_linear = nn.Sequential(last_linear, nn.Dropout(max_dropout, inplace=True))
 
         cls_param = list(model.last_linear.named_parameters())
         feat_param = [param for param in model.named_parameters() if not param[0].startswith('last_linear')]
@@ -204,7 +210,7 @@ def main():
 
     for epoch in range(args.start_epoch, args.epochs):
         print(args.explain)
-        
+
         # train for one epoch
         train(train_loader, model, criterion, optimizer, epoch)
 
