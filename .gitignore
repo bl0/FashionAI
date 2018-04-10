@@ -114,3 +114,4 @@ submits
 *.zip
 
 .DS_Store
+._.*
