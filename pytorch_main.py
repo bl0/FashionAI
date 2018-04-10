@@ -172,7 +172,7 @@ def build_model():
     elif args.opt == 'amsgrad':  # need pytorch master version
         optimizer = torch.optim.Adam([i.copy() for i in args.param_groups], amsgrad=True)
     elif args.opt == 'sgd':
-        optimizer = torch.optim.SGD([i.copy() for i in args.param_groups], momentum=args.momentum) 
+        optimizer = torch.optim.SGD([i.copy() for i in args.param_groups], momentum=args.momentum, nesterov=True) 
     else:
         print('Not supported yet')
 

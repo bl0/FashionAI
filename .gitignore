@@ -112,3 +112,5 @@ transfer_learning.ipynb
 tensorboard_log/
 submits
 *.zip
+
+.DS_Store
