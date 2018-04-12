@@ -133,6 +133,8 @@ def build_model():
 
         if args.no_norm:
             input_norm = nn.BatchNorm2d(3)
+            model.conv1 = nn.Sequential(input_norm, model.conv1)
+        else:
             model.conv1 = nn.Sequential(model.conv1)
 
         if args.dropout > 0:
