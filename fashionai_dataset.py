@@ -20,7 +20,6 @@ classes_len = {'collar_design_labels':[0,5],
                'coat_length_labels':[35,43],
                'lapel_design_labels':[43,48],
                'pant_length_labels':[48,54]}
-
 all_class_lengths = 54
 
 def pil_loader(path):
@@ -29,16 +28,18 @@ def pil_loader(path):
         img = Image.open(f)
         return img.convert('RGB')
 
-class FashionAIDataset(Dataset):
+class FashionAIVisibleDataset(Dataset):
 
-    def __init__(self, csv_file, img_dir, class_name="all", transform=None):
+    def __init__(self, csv_file, img_dir, input_size, stage='train', class_name="all", transform=None):
         self.img_dir = img_dir
         self.transform = transform
+        self.stage = stage
+        self.input_size = input_size
+        self.class_name = class_name
 
         df = pd.read_csv(csv_file, header=None)
         df.columns = ['image_id', 'class', 'label']
 
-        self.class_name = class_name
         if class_name != "all":
             self.df_load = (df[df['class'] == class_name].copy())
             self.df_load.reset_index(inplace=True)
@@ -47,32 +48,39 @@ class FashionAIDataset(Dataset):
             self.df_load = df
 
         n = len(self.df_load)
-        if class_name != "all":
-            self.n_class = len(self.df_load['label'][0])
-        else:
-            # sum of lengths of all classes
-            self.n_class = all_class_lengths
-        #self.n_class = len(self.df_load['label'][0])
+
         self.Y = np.zeros((n), dtype=int)
-        self.idx = np.zeros((n, all_class_lengths), dtype=int)
+        self.idx_visible = []
+        self.idx_invisible = []
         for i in range(n):
-            label = self.df_load['label'][i].find('y')
-            self.Y[i] = label
-            left, right = classes_len[self.df_load['class'][i]]
-            self.idx[i, left:right] = 1
+            if self.df_load['label'][i][0] == 'y':
+                self.idx_invisible.append(i)
+                self.Y[i] = 0
+            else:
+                self.idx_visible.append(i)
+                self.Y[i] = 1
 
     def __len__(self):
-        return len(self.df_load)
+        return 2*len(self.idx_visible) if self.stage == 'train' else len(self.df_load)
 
     def __getitem__(self, idx):
+        if self.stage == 'train':
+            if len(self.idx_invisible) == 0 or idx % 2 == 0:
+                idx = self.idx_visible[int(idx / 2)]
+            else:
+                idx = self.idx_invisible[int(idx / 2) % len(self.idx_invisible)]
         img_name = os.path.join(self.img_dir, self.df_load['image_id'][idx])
         img = pil_loader(img_name)
 
-        # import ipdb; ipdb.set_trace()
+        if self.Y[idx] or self.stage != 'train':
+            img = transforms.Resize((self.input_size, self.input_size))(img)
+        else:
+            img = transforms.RandomResizedCrop(self.input_size)(img)
+
         if self.transform:
             img = self.transform(img)
 
-        return img, self.Y[idx], self.idx[idx]
+        return img, self.Y[idx], classes.index(self.df_load['class'][idx])
 
 class FashionAITestDataset(Dataset):
 

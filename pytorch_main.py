@@ -22,7 +22,7 @@ from util import write_results
 from util import weighted_softmax_loss
 from util import MAP
 from options import args
-from fashionai_dataset import FashionAIDataset
+from fashionai_dataset import FashionAIVisibleDataset
 from fashionai_dataset import FashionAITestDataset
 from fashionai_dataset import classes
 
@@ -58,12 +58,12 @@ def load_data(opts):
     else:
         normalize = transforms.Normalize(mean=opts.mean, std=opts.std)
 
-    train_dataset = FashionAIDataset(
+    train_dataset = FashionAIVisibleDataset(
         traindir, args.data,
         class_name=class_name,
+        stage='train',
+        input_size=args.tr_input_size,
         transform=transforms.Compose([
-            # transforms.RandomResizedCrop(max(opts.input_size)), # TODO: if input size not fixed
-            transforms.RandomResizedCrop(args.tr_input_size),
             transforms.RandomHorizontalFlip(),
             transforms.ToTensor(),
             normalize,
@@ -77,7 +77,8 @@ def load_data(opts):
 
         val_transform = transforms.Compose([resize, crop, to_tensor, norm])
     elif args.crop == 'center':
-        resize = transforms.Resize(args.te_input_size)
+        resize = transforms.Resize((args.te_input_size, args.te_input_size))
+
         crop = transforms.CenterCrop(args.te_input_size)
         to_tensor = transforms.ToTensor()
         norm = normalize
@@ -90,7 +91,12 @@ def load_data(opts):
 
         val_transform = transforms.Compose([resize, to_tensor, norm])
 
-    val_dataset = FashionAIDataset(valdir, args.data, class_name=class_name, transform=val_transform)
+    val_dataset = FashionAIVisibleDataset(
+            valdir, args.data,
+            class_name=class_name,
+            input_size=args.tr_input_size,
+            stage='val',
+            transform=val_transform)
     test_dataset = FashionAITestDataset(testdir, args.test_data, class_name=class_name, transform=val_transform)
 
     train_loader = torch.utils.data.DataLoader(
@@ -108,11 +114,9 @@ def load_data(opts):
     return train_loader, val_loader, test_loader
 
 def build_model():
-    n_classes = [5, 10, 6, 9, 5, 8, 5, 6]
-    if args.cur_class_idx == -1:
-        n_class = sum(n_classes)
-    else:
-        n_class = n_classes[cur_class_idx]
+    ############### Invisible Begin ############################
+    n_class = len(classes)
+    ############### Invisible End ############################
 
     # create model
     if args.pretrained:
@@ -172,7 +176,7 @@ def build_model():
     elif args.opt == 'amsgrad':  # need pytorch master version
         optimizer = torch.optim.Adam([i.copy() for i in args.param_groups], amsgrad=True)
     elif args.opt == 'sgd':
-        optimizer = torch.optim.SGD([i.copy() for i in args.param_groups], momentum=args.momentum, nesterov=True) 
+        optimizer = torch.optim.SGD([i.copy() for i in args.param_groups], momentum=args.momentum, nesterov=True)
     else:
         print('Not supported yet')
 
@@ -205,7 +209,9 @@ def main():
     global best_mAP, best_prec
     model, optimizer = build_model()
     train_loader, val_loader, test_loader = load_data(model.module)
-    criterion = nn.CrossEntropyLoss().cuda()
+    # criterion = nn.CrossEntropyLoss().cuda()
+    criterion = nn.BCELoss().cuda()
+
 
     if args.inference:
         inference(test_loader, model)
@@ -266,7 +272,7 @@ def train(train_loader, model, criterion, optimizer, epoch):
     model.train()
 
     end = time.time()
-    for i, (input, target, idx) in enumerate(train_loader):
+    for i, (input, target, class_idx) in enumerate(train_loader):
         # measure data loading time
         data_time.update(time.time() - end)
 
@@ -285,11 +291,23 @@ def train(train_loader, model, criterion, optimizer, epoch):
             output = output[0]
 
         # new weighted softmax loss
-        loss = weighted_softmax_loss(output, target_var, idx)
+        # loss = weighted_softmax_loss(output, target_var, idx)
+
+        ############### Invisible Begin ############################
+        prob = nn.Sigmoid()(output[:, class_idx[0]])
+        loss = criterion(prob, target_var.float())
+        pred = prob > 0.5
+        conf = np.zeros([2, 2])
+        for t, p in zip(target_var.data.cpu().numpy(), pred.data.cpu().numpy()):
+            conf[t][p] += 1
+        TP, FP, FN, TN = conf[1][1], conf[0][1], conf[1][0], conf[0][0]
+        prec.update(torch.mean((pred.long() == target_var).float()).cpu().data[0])
+        ############### Invisible End ############################
 
         # measure accuracy and record loss
         losses.update(loss.data[0], input.size(0))
-        prec.update(accuracy_all(output.data, target, idx)[0], input.size(0))
+
+        # prec.update(accuracy_all(output.data, target, idx)[0], input.size(0))
 
         # compute gradient and do SGD step
         optimizer.zero_grad()
@@ -309,6 +327,10 @@ def train(train_loader, model, criterion, optimizer, epoch):
                   'Prec {prec.val:.3f} ({prec.avg:.3f})'.format(
                    epoch, args.epochs, i, len(train_loader), batch_time=batch_time,
                    data_time=data_time, loss=losses, prec=prec))
+            ############### Invisible Begin ############################
+            print('TP {}, FP {}, FN {}, TN {}'.format(TP, FP, FN, TN))
+            ############### Invisible End ############################
+
 
         # tensorboard record
         global global_train_step
@@ -320,16 +342,13 @@ def validate(val_loader, model, criterion):
     batch_time = AverageMeter()
     losses = AverageMeter()
     prec = AverageMeter()
+    TP, FN, FP, TN = 0, 0, 0, 0
 
     # switch to evaluate mode
     model.eval()
 
-    output_all, target_all, idx_all = [], [], []
     end = time.time()
-    for i, (input, target, idx) in enumerate(val_loader):
-        target_all.append(target)
-        idx_all.append(idx)
-
+    for i, (input, target, class_idx) in enumerate(val_loader):
         target = target.cuda(async=True)
 
         if args.crop == 'ten':
@@ -341,15 +360,33 @@ def validate(val_loader, model, criterion):
         output = model(input_var)
         if args.crop == 'ten':
             output = output.view(bs, ncrop, -1).mean(1)
-        output_all.append(output.cpu().data.numpy())
         target_var = torch.autograd.Variable(target, volatile=True)
 
-        #loss = criterion(output, target_var)
-        loss = weighted_softmax_loss(output, target_var, idx)
+        ############### Invisible Begin ############################
+        prob = nn.Sigmoid()(output[:, class_idx[0]])
+        loss = criterion(prob, target_var.float())
+        pred = prob > 0.50
+        conf = np.zeros([2, 2])
+        for idx, (t, p) in enumerate(zip(target_var.data.cpu().numpy(), pred.data.cpu().numpy())):
+            conf[t][p] += 1
+
+            # case study
+            if t != p:
+                restore_transform = transforms.Compose([
+                    DeNormalize(),
+                    transforms.ToPILImage()
+                ])
+                image = restore_transform(input[idx])
+                image.save('case_study_images/{}_{}_prob_{}_target_{}.jpg'.format(i, idx, prob.data.cpu().numpy()[idx], t))
+        TP += conf[1][1]
+        FP += conf[0][1]
+        FN += conf[1][0]
+        TN += conf[0][0]
+        prec.update(torch.mean((pred.long() == target_var).float()).cpu().data[0])
+        ############### Invisible End ############################
 
         # measure accuracy and record loss
         losses.update(loss.data[0], input.size(0))
-        prec.update(accuracy_all(output.data, target, idx)[0], input.size(0))
 
         # measure elapsed time
         batch_time.update(time.time() - end)
@@ -363,12 +400,13 @@ def validate(val_loader, model, criterion):
                 i, len(val_loader), batch_time=batch_time,
                 loss=losses, prec=prec))
 
-    output_all = np.concatenate(output_all)
-    target_all = np.concatenate(target_all)
-    idx_all = np.concatenate(idx_all)
-    mAP = MAP(output_all, target_all, idx_all)
+    ############### Invisible Begin ############################
+    print('TP {}, FP {}, FN {}, TN {}'.format(TP, FP, FN, TN))
+    print(' * Prec {prec:.3f}'.format(prec=prec.avg))
+    mAP = prec.avg
+    ############### Invisible End ############################
 
-    print(' * Prec {prec:.3f}, mAP = {mAP:.3f}'.format(prec=prec.avg, mAP=mAP))
+
     return mAP, prec.avg
 
 
@@ -405,6 +443,16 @@ def inference(test_loader, model):
     write_results(test_loader.dataset.df_load, results, save_path)
 
     print('Inference done')
+
+class DeNormalize(object):
+    def __init__(self):
+        self.mean = 0.485, 0.456, 0.406
+        self.std = 0.229, 0.224, 0.225
+
+    def __call__(self, tensor):
+        for t, m, s in zip(tensor, self.mean, self.std):
+            t.mul_(s).add_(m)
+        return tensor
 
 def adjust_learning_rate(optimizer, epoch, n_batch=None, method='cosine'):
     if method == 'cosine':
