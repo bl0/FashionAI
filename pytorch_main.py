@@ -17,7 +17,7 @@ import torchvision.models as models
 
 from util import save_checkpoint
 from util import AverageMeter
-from util import accuracy_all
+from util import accuracy_all, accuracy
 from util import write_results
 from util import weighted_softmax_loss
 from util import MAP
@@ -112,7 +112,7 @@ def build_model():
     if args.cur_class_idx == -1:
         n_class = sum(n_classes)
     else:
-        n_class = n_classes[cur_class_idx]
+        n_class = n_classes[args.cur_class_idx]
 
     # create model
     if args.pretrained:
@@ -174,7 +174,7 @@ def build_model():
     elif args.opt == 'amsgrad':  # need pytorch master version
         optimizer = torch.optim.Adam([i.copy() for i in args.param_groups], amsgrad=True)
     elif args.opt == 'sgd':
-        optimizer = torch.optim.SGD([i.copy() for i in args.param_groups], momentum=args.momentum, nesterov=True) 
+        optimizer = torch.optim.SGD([i.copy() for i in args.param_groups], momentum=args.momentum, nesterov=True)
     else:
         print('Not supported yet')
 
@@ -286,12 +286,15 @@ def train(train_loader, model, criterion, optimizer, epoch):
         if args.arch == 'inception_v3':
             output = output[0]
 
-        # new weighted softmax loss
-        loss = weighted_softmax_loss(output, target_var, idx)
+        if train_loader.dataset.class_name == 'all':
+            # new weighted softmax loss
+            loss = weighted_softmax_loss(output, target_var, idx)
+            prec.update(accuracy_all(output.data, target, idx)[0], input.size(0))
+        else:
+            loss = criterion(output, target_var)
+            prec.update(accuracy(output.data, target)[0], input.size(0))
 
-        # measure accuracy and record loss
         losses.update(loss.data[0], input.size(0))
-        prec.update(accuracy_all(output.data, target, idx)[0], input.size(0))
 
         # compute gradient and do SGD step
         optimizer.zero_grad()
@@ -329,9 +332,6 @@ def validate(val_loader, model, criterion):
     output_all, target_all, idx_all = [], [], []
     end = time.time()
     for i, (input, target, idx) in enumerate(val_loader):
-        target_all.append(target)
-        idx_all.append(idx)
-
         target = target.cuda(async=True)
 
         if args.crop == 'ten':
@@ -343,15 +343,17 @@ def validate(val_loader, model, criterion):
         output = model(input_var)
         if args.crop == 'ten':
             output = output.view(bs, ncrop, -1).mean(1)
-        output_all.append(output.cpu().data.numpy())
         target_var = torch.autograd.Variable(target, volatile=True)
 
-        #loss = criterion(output, target_var)
-        loss = weighted_softmax_loss(output, target_var, idx)
+        if val_loader.dataset.class_name == 'all':
+            # new weighted softmax loss
+            loss = weighted_softmax_loss(output, target_var, idx)
+            prec.update(accuracy_all(output.data, target, idx)[0], input.size(0))
+        else:
+            loss = criterion(output, target_var)
+            prec.update(accuracy(output.data, target)[0], input.size(0))
 
-        # measure accuracy and record loss
         losses.update(loss.data[0], input.size(0))
-        prec.update(accuracy_all(output.data, target, idx)[0], input.size(0))
 
         # measure elapsed time
         batch_time.update(time.time() - end)
@@ -365,14 +367,21 @@ def validate(val_loader, model, criterion):
                 i, len(val_loader), batch_time=batch_time,
                 loss=losses, prec=prec))
 
-    output_all = np.concatenate(output_all)
-    target_all = np.concatenate(target_all)
-    idx_all = np.concatenate(idx_all)
-    mAP = MAP(output_all, target_all, idx_all)
+        target_all.append(target)
+        idx_all.append(idx)
+        output_all.append(output.cpu().data.numpy())
 
-    print(' * Prec {prec:.3f}, mAP = {mAP:.3f}'.format(prec=prec.avg, mAP=mAP))
-    return mAP, prec.avg
+    if val_loader.dataset.class_name == 'all':
+        output_all = np.concatenate(output_all)
+        target_all = np.concatenate(target_all)
+        idx_all = np.concatenate(idx_all)
+        mAP = MAP(output_all, target_all, idx_all)
 
+        print(' * Prec {prec:.3f}, mAP = {mAP:.3f}'.format(prec=prec.avg, mAP=mAP))
+        return mAP, prec.avg
+    else:
+        print(' * Prec {prec:.3f}'.format(prec=prec.avg))
+        return prec.avg, prec.avg
 
 def inference(test_loader, model):
     # switch to evaluate mode
@@ -390,15 +399,18 @@ def inference(test_loader, model):
         if args.crop == 'ten':
             output = output.view(bs, ncrop, -1).mean(1)
 
-        real_output = torch.mul(output, torch.autograd.Variable(idx).float().cuda())
+        if test_loader.dataset.class_name == 'all':
+            real_output = torch.mul(output, torch.autograd.Variable(idx).float().cuda())
 
-        for j in range(real_output.size()[0]):
-            append_value = torch.nn.functional.softmax(real_output[j][real_output[j]!= 0].float())
-            results.append(append_value.data.cpu().numpy())
+            for j in range(real_output.size()[0]):
+                append_value = torch.nn.functional.softmax(real_output[j][real_output[j]!= 0].float())
+                results.append(append_value.data.cpu().numpy())
+        else:
+            pred = torch.nn.functional.softmax(output, 1)
+            results.append(pred.data.cpu().numpy())
 
         if i % args.print_freq == 0:
             print('Inference: [{0}/{1}]'.format(i, len(test_loader)))
-
 
     # write results to file
     save_path = os.path.join(args.result_path, test_loader.dataset.class_name+".csv")
